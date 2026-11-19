@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.png" alt="Davoo Player Banner" width="100%">
+  <img src="banner.png?v=2" alt="Davoo Player Banner" width="100%">
 </p>
 
 # 🎵 Davoo Player
