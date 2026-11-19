@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="banner.jpg" alt="Davoo Player Banner" width="100%">
+  <img src="banner.png" alt="Davoo Player Banner" width="100%">
 </p>
 
 # 🎵 Davoo Player
@@ -34,4 +34,4 @@ Si deseas compilar el proyecto manualmente desde la terminal:
 1. **Clona el repositorio:**
    ```bash
    git clone [https://github.com/DavooPunk/Davoo-Player.git](https://github.com/DavooPunk/Davoo-Player.git)
-   cd Davoo-Player<img width="3584" height="1184" alt="Gemini_Generated_Image_70ygif70ygif70yg" src="https://github.com/user-attachments/assets/e626e85f-1ba5-474d-95f3-18e506927653" />
+   cd Davoo-Player
