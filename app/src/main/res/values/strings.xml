@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Davoo Player</string>
+    <string name="nav_library">Biblioteca</string>
+    <string name="nav_albums">Álbumes</string>
+    <string name="nav_playlists">Listas</string>
+    <string name="search_placeholder">Buscar canción, artista o álbum…</string>
+    <string name="filter_all">Todas</string>
+    <string name="filter_flac">FLAC</string>
+    <string name="filter_mp3">MP3</string>
+    <string name="action_scan_library">Escanear</string>
+    <string name="action_import_files">Importar archivos</string>
+    <string name="action_play_all">Reproducir todo</string>
+    <string name="action_shuffle_all">Aleatorio</string>
+    <string name="action_create_playlist">Nueva lista</string>
+    <string name="permission_title">Acceso a tu biblioteca de audio</string>
+    <string name="permission_subtitle">Permite que Davoo Player explore tu música descargada en formatos MP3 y FLAC, o importa archivos directamente.</string>
+    <string name="permission_grant">Permitir acceso</string>
+    <string name="empty_library_title">No se encontró música aún</string>
+    <string name="empty_library_subtitle">Descarga canciones MP3 o FLAC en tu dispositivo o impórtalas desde tus carpetas.</string>
+    <string name="empty_playlists_title">Crea tu primera lista</string>
+    <string name="empty_playlists_subtitle">Organiza tus discos FLAC y mezclas MP3 en listas personalizadas.</string>
+    <string name="queue_title">Cola de reproducción</string>
+    <string name="now_playing_title">Reproduciendo ahora</string>
+    <string name="unknown_artist">Artista desconocido</string>
+    <string name="unknown_album">Álbum desconocido</string>
+    <string name="notification_channel_name">Reproducción de música</string>
+    <string name="notification_channel_description">Notificaciones y controles del panel multimedia de Android</string>
+    <string name="widget_description">Controla tu música local en Davoo Player directamente desde la pantalla de inicio</string>
+    <string name="widget_idle_subtitle">Toca para abrir tu biblioteca</string>
+    <string name="widget_artwork_desc">Carátula de la canción en reproducción</string>
+    <string name="widget_prev_desc">Canción anterior</string>
+    <string name="widget_play_pause_desc">Reproducir o pausar</string>
+    <string name="widget_next_desc">Siguiente canción</string>
+    <string name="nav_collection">Colección</string>
+</resources>

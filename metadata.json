@@ -1,0 +1,6 @@
+{
+  "name": "Davoo Player",
+  "description": "Davoo Player: reproductor de música local para archivos MP3, FLAC, WAV, AAC y OGG con listas personalizadas, letras .lrc y ecualizador.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
