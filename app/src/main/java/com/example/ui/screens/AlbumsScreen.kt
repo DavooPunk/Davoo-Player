@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -47,7 +49,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -106,11 +110,25 @@ fun AlbumsScreen(
     onEditTags: (AudioTrack) -> Unit = {},
     onShowMetadata: (AudioTrack) -> Unit = {},
     onToggleFolderExclude: (folderName: String, currentlyExcluded: Boolean) -> Unit = { _, _ -> },
+    onOpenGlobalSearch: () -> Unit = {},
+    requestedArtistName: String? = null,
+    onConsumeRequestedArtist: () -> Unit = {},
     bottomContentPadding: PaddingValues,
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(CollectionTab.ALBUMS) }
     var activeDrilldownKey by remember { mutableStateOf<CollectionDrilldownKey?>(null) }
+
+    LaunchedEffect(requestedArtistName) {
+        if (!requestedArtistName.isNullOrBlank()) {
+            selectedTab = CollectionTab.ARTISTS
+            activeDrilldownKey = CollectionDrilldownKey(
+                source = DrilldownSource.ARTIST,
+                name = requestedArtistName
+            )
+            onConsumeRequestedArtist()
+        }
+    }
 
     val activeDrilldown = activeDrilldownKey?.let { key ->
         when (key.source) {
@@ -233,26 +251,50 @@ fun AlbumsScreen(
             .fillMaxSize()
             .testTag("albums_screen")
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "COLECCIÓN",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            val heading = when (selectedTab) {
-                CollectionTab.ALBUMS -> "Álbumes (${albums.size})"
-                CollectionTab.ARTISTS -> "Artistas (${artists.size})"
-                CollectionTab.GENRES -> "Géneros (${genres.size})"
-                CollectionTab.FOLDERS -> "Carpetas (${folders.size})"
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "COLECCIÓN",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                val heading = when (selectedTab) {
+                    CollectionTab.ALBUMS -> "Álbumes (${albums.size})"
+                    CollectionTab.ARTISTS -> "Artistas (${artists.size})"
+                    CollectionTab.GENRES -> "Géneros (${genres.size})"
+                    CollectionTab.FOLDERS -> "Carpetas (${folders.size})"
+                }
+                Text(
+                    text = heading,
+                    style = MaterialTheme.typography.headlineMedium
+                )
             }
-            Text(
-                text = heading,
-                style = MaterialTheme.typography.headlineMedium
-            )
+            Surface(
+                onClick = onOpenGlobalSearch,
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .testTag("header_search_button")
+            ) {
+                Box(
+                    modifier = Modifier.size(44.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Search,
+                        contentDescription = "Buscar en toda la biblioteca",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
         }
 
         LazyRow(

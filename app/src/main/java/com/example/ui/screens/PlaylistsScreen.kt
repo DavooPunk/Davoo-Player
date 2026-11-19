@@ -26,10 +26,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
@@ -46,7 +48,6 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shuffle
@@ -110,6 +111,7 @@ fun PlaylistsScreen(
     historyCount: Int = 0,
     onCreatePlaylist: () -> Unit,
     onImportM3u: () -> Unit = {},
+    onOpenGlobalSearch: () -> Unit = {},
     onSmartPlaylistClick: (SmartPlaylistType) -> Unit = {},
     onPlaylistClick: (PlaylistSummary) -> Unit,
     bottomContentPadding: PaddingValues,
@@ -128,7 +130,7 @@ fun PlaylistsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "CURACIÓN PERSONAL",
                         style = MaterialTheme.typography.labelMedium,
@@ -139,13 +141,38 @@ fun PlaylistsScreen(
                         style = MaterialTheme.typography.headlineMedium
                     )
                 }
-                OutlinedButton(
-                    onClick = onImportM3u,
-                    modifier = Modifier.testTag("import_m3u_button")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Importar .m3u")
+                    OutlinedButton(
+                        onClick = onImportM3u,
+                        modifier = Modifier.testTag("import_m3u_button")
+                    ) {
+                        Icon(Icons.Rounded.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Importar .m3u")
+                    }
+                    Surface(
+                        onClick = onOpenGlobalSearch,
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("header_search_button")
+                    ) {
+                        Box(
+                            modifier = Modifier.size(44.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Search,
+                                contentDescription = "Buscar en toda la biblioteca",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
             }
 
@@ -230,7 +257,7 @@ fun PlaylistsScreen(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.QueueMusic,
+                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(52.dp)

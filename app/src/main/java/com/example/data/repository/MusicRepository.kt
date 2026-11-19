@@ -24,7 +24,10 @@ import com.example.model.AudioTrackMetadata
 import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
 import com.example.model.SdCardFolder
+import com.example.ui.components.AudioArtImageLoaderProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -49,6 +53,7 @@ class MusicRepository(
     private val trackLyricsTranslationDao: TrackLyricsTranslationDao? = null
 ) {
     private val prefsStore = PlaybackPreferencesStore(context)
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val scanMutex = Mutex()
     private val mediaStoreTracksFlow = MutableStateFlow<List<AudioTrack>>(emptyList())
     private val sdTracksFlow = MutableStateFlow<List<AudioTrack>>(emptyList())
@@ -194,20 +199,39 @@ class MusicRepository(
     }
 
     suspend fun removeSdCardFolder(treeUri: String) {
-        runCatching {
-            context.contentResolver.releasePersistableUriPermission(
-                Uri.parse(treeUri),
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        }
-        scanMutex.withLock {
-            _isScanning.value = true
-            try {
-                prefsStore.removeSdCardFolder(treeUri)
-                scanPersistedSdFoldersLocked()
-            } finally {
-                _isScanning.value = false
+        val removedUris = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.releasePersistableUriPermission(
+                    Uri.parse(treeUri),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
             }
+            scanMutex.withLock {
+                prefsStore.removeSdCardFolder(treeUri)
+                val targetFolderName = _sdCardFolders.value
+                    .firstOrNull { it.treeUri == treeUri }
+                    ?.displayName
+                val currentTracks = sdTracksFlow.value
+                val (toRemove, remaining) = currentTracks.partition { track ->
+                    track.sourceTreeUri == treeUri ||
+                        track.contentUri.startsWith(treeUri) ||
+                        (targetFolderName != null &&
+                            track.isDocumentTreeTrack &&
+                            track.folderName == targetFolderName)
+                }
+                sdTracksFlow.value = remaining
+                _sdCardFolders.value = _sdCardFolders.value.filterNot { it.treeUri == treeUri }
+                toRemove.map { it.contentUri }
+            }
+        }
+        evictRemovedUrisInBackground(removedUris)
+    }
+
+    private fun evictRemovedUrisInBackground(uris: List<String>) {
+        if (uris.isEmpty()) return
+        cleanupScope.launch {
+            AudioArtImageLoaderProvider.evictUrisAsync(uris)
+            DeviceMusicScanner.evictDurationsAsync(uris)
         }
     }
 
@@ -295,7 +319,30 @@ class MusicRepository(
     }
 
     suspend fun excludeFolder(folderName: String) {
-        excludedFolderDao.excludeFolder(ExcludedFolderEntity(folderName = folderName))
+        val removedUris = withContext(Dispatchers.IO) {
+            val uris = combinedRawTracksFlow.first()
+                .filter { it.folderName == folderName }
+                .map { it.contentUri }
+            excludedFolderDao.excludeFolder(ExcludedFolderEntity(folderName = folderName))
+            uris
+        }
+        evictRemovedUrisInBackground(removedUris)
+    }
+
+    suspend fun excludeFolders(folderNames: List<String>) {
+        if (folderNames.isEmpty()) return
+        val distinct = folderNames.distinct()
+        val removedUris = withContext(Dispatchers.IO) {
+            val nameSet = distinct.toHashSet()
+            val uris = combinedRawTracksFlow.first()
+                .filter { it.folderName in nameSet }
+                .map { it.contentUri }
+            excludedFolderDao.excludeFolders(
+                distinct.map { ExcludedFolderEntity(folderName = it) }
+            )
+            uris
+        }
+        evictRemovedUrisInBackground(removedUris)
     }
 
     suspend fun includeFolder(folderName: String) {
@@ -547,6 +594,7 @@ class MusicRepository(
         distinct.chunked(500).forEach { chunk ->
             importedTrackDao.deleteByUris(chunk)
         }
+        evictRemovedUrisInBackground(distinct)
         return distinct.size
     }
 

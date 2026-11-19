@@ -529,13 +529,15 @@ class LyricsTranslationCoordinator(
         translatedLyrics: LyricsData
     ) {
         activeJob?.cancel()
-        val guessedEngine = if (translatedLyrics.sourceLabel.contains("Google", ignoreCase = true)) {
-            TranslationEngine.GOOGLE
-        } else {
-            TranslationEngine.DEEPL
+        val detectedEngine = when {
+            translatedLyrics.sourceLabel.contains("Google", ignoreCase = true) -> TranslationEngine.GOOGLE
+            translatedLyrics.sourceLabel.contains("DeepL", ignoreCase = true) -> TranslationEngine.DEEPL
+            else -> null
         }
-        val key = CacheKey(trackId, originalLyrics.lines.hashCode(), language, guessedEngine)
-        cache[key] = translatedLyrics
+        if (detectedEngine != null) {
+            val key = CacheKey(trackId, originalLyrics.lines.hashCode(), language, detectedEngine)
+            cache[key] = translatedLyrics
+        }
         _state.value = LyricsTranslationUiState.Success(
             trackId = trackId,
             language = language,

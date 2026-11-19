@@ -179,7 +179,7 @@ class LrcLibLyricsFetcher(
 
     companion object {
         const val DEFAULT_BASE_URL = "https://lrclib.net"
-        private const val USER_AGENT = "DavooPlayer/1.0 (https://www.lyricsify.com)"
+        private const val USER_AGENT = "DavooPlayer/2.0 (https://www.lyricsify.com)"
 
         private fun defaultClient(): OkHttpClient {
             return OkHttpClient.Builder()

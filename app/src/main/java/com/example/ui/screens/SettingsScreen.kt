@@ -202,9 +202,9 @@ fun SettingsScreen(
                         iconTint = LosslessCyan,
                         title = "Ecualizador y DSP",
                         subtitle = if (audioSettings.eqEnabled) {
-                            "Activo · Perfil ${audioSettings.eqPreset.label}"
+                            "Activo · ${audioSettings.activeProfileName ?: audioSettings.eqPreset.label}"
                         } else {
-                            "5 bandas, Bass Boost, Virtualizador 3D, velocidad y balance"
+                            "10 bandas + Preamp AutoEq, Bass Boost, Virtualizador 3D y balance"
                         },
                         onClick = onOpenEqualizer,
                         testTag = "settings_equalizer_row"

@@ -1,35 +1,27 @@
 package com.example.playback
 
 import android.media.audiofx.BassBoost
-import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
-import android.media.audiofx.Virtualizer
 import com.example.model.AudioSettings
 import com.example.model.EqBandInfo
+import com.example.model.EqPreset
+import com.example.model.TEN_BAND_CENTERS_HZ
 
 /**
- * Manages hardware/OS Android audio DSP effects (5-band Equalizer, BassBoost, Virtualizer,
- * and LoudnessEnhancer for automatic volume normalization on untagged tracks)
- * bound to ExoPlayer's audioSessionId. Gracefully handles headless/emulator/unit-test
- * environments where native AudioEffect HAL isn't present.
+ * Manages OS Android audio DSP effects (BassBoost, Virtualizer, and LoudnessEnhancer for
+ * automatic volume normalization on untagged tracks) bound to ExoPlayer's audioSessionId,
+ * while providing unified 10-band EQ metadata aligned with [TenBandEqualizerAudioProcessor].
  */
 class AudioEffectsController {
 
     private var currentSessionId: Int = 0
-    private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
-    private var virtualizer: Virtualizer? = null
+    @Suppress("DEPRECATION")
+    private var virtualizer: android.media.audiofx.Virtualizer? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var latestSettings: AudioSettings = AudioSettings()
     private var currentTrackHasReplayGainTag: Boolean = false
 
-    private var cachedBandCount: Int = 0
-    private var cachedMinMb: Int = -1500
-    private var cachedMaxMb: Int = 1500
-    private var cachedCenterFreqsHz: List<Int> = emptyList()
-
-    private var lastAppliedEqEnabled: Boolean? = null
-    private var lastAppliedGainsMb: List<Int>? = null
     private var lastAppliedBass: Int? = null
     private var lastAppliedVirt: Int? = null
     private var lastAppliedLoudnessActive: Boolean? = null
@@ -63,49 +55,11 @@ class AudioEffectsController {
         return latestSettings.replayGainEnabled && !currentTrackHasReplayGainTag
     }
 
+    @Suppress("DEPRECATION")
     private fun applySettingsInternal(settings: AudioSettings, force: Boolean) {
         latestSettings = settings
         val sessionId = currentSessionId
         if (sessionId <= 0) return
-
-        // Equalizer: lazily instantiate only when enabled; release when turned off
-        if (settings.eqEnabled) {
-            if (equalizer == null) {
-                initEqualizer(sessionId)
-            }
-            val eq = equalizer
-            if (eq != null) {
-                val bandCount = cachedBandCount.coerceIn(0, MAX_BAND_COUNT)
-                val minMb = cachedMinMb
-                val maxMb = cachedMaxMb.coerceAtLeast(minMb + 1)
-                val clampedGains = (0 until bandCount).map { i ->
-                    settings.bandGainsMb.getOrElse(i) { 0 }.coerceIn(minMb, maxMb)
-                }
-                val needsUpdate = force ||
-                    lastAppliedEqEnabled != true ||
-                    lastAppliedGainsMb != clampedGains
-                if (needsUpdate) {
-                    val eqOk = runCatching {
-                        if (!eq.enabled) {
-                            eq.enabled = true
-                        }
-                        for (i in 0 until bandCount) {
-                            eq.setBandLevel(i.toShort(), clampedGains[i].toShort())
-                        }
-                    }.isSuccess
-                    if (eqOk) {
-                        lastAppliedEqEnabled = true
-                        lastAppliedGainsMb = clampedGains
-                    } else {
-                        releaseEqualizer()
-                    }
-                }
-            }
-        } else if (equalizer != null || force || lastAppliedEqEnabled == true) {
-            releaseEqualizer()
-            lastAppliedEqEnabled = false
-            lastAppliedGainsMb = null
-        }
 
         // BassBoost: lazily instantiate only when strength > 0
         val bassStrength = settings.bassBoostStrength.coerceIn(0, 1000)
@@ -137,7 +91,7 @@ class AudioEffectsController {
         val virtStrength = settings.virtualizerStrength.coerceIn(0, 1000)
         if (virtStrength > 0) {
             if (virtualizer == null) {
-                runCatching { virtualizer = Virtualizer(0, sessionId) }
+                runCatching { virtualizer = android.media.audiofx.Virtualizer(0, sessionId) }
                     .onFailure { releaseVirtualizer() }
             }
             val virt = virtualizer
@@ -192,54 +146,17 @@ class AudioEffectsController {
         }
     }
 
-    private fun initEqualizer(sessionId: Int) {
-        val created = runCatching { Equalizer(0, sessionId) }.getOrNull() ?: return
-        val metadataOk = runCatching {
-            val rawCount = created.numberOfBands.toInt().coerceIn(0, MAX_BAND_COUNT)
-            val range = created.bandLevelRange
-            val minMb = range?.getOrElse(0) { -1500 }?.toInt() ?: -1500
-            val maxMb = (range?.getOrElse(1) { 1500 }?.toInt() ?: 1500).coerceAtLeast(minMb + 1)
-            val centers = (0 until rawCount).map { idx ->
-                val rawMilliHz = created.getCenterFreq(idx.toShort())
-                (rawMilliHz / 1000).takeIf { it > 0 } ?: DEFAULT_CENTERS_HZ.getOrElse(idx) { 1000 }
-            }
-            cachedBandCount = rawCount
-            cachedMinMb = minMb
-            cachedMaxMb = maxMb
-            cachedCenterFreqsHz = centers
-        }.isSuccess
-
-        if (metadataOk && cachedBandCount > 0) {
-            equalizer = created
-        } else {
-            runCatching { created.release() }
-            cachedBandCount = 0
-            cachedCenterFreqsHz = emptyList()
-        }
-    }
-
     @Synchronized
     fun getBands(settings: AudioSettings = latestSettings): List<EqBandInfo> {
-        if (equalizer != null && cachedBandCount > 0 && cachedCenterFreqsHz.size == cachedBandCount) {
-            val minMb = cachedMinMb
-            val maxMb = cachedMaxMb.coerceAtLeast(minMb + 1)
-            return cachedCenterFreqsHz.mapIndexed { idx, hz ->
-                EqBandInfo(
-                    index = idx,
-                    centerFreqHz = hz,
-                    minLevelMb = minMb,
-                    maxLevelMb = maxMb,
-                    currentLevelMb = settings.bandGainsMb.getOrElse(idx) { 0 }.coerceIn(minMb, maxMb)
-                )
-            }
-        }
-        return DEFAULT_CENTERS_HZ.mapIndexed { idx, hz ->
+        val normalized = EqPreset.normalizeToTenBands(settings.bandGainsMb)
+        return TEN_BAND_CENTERS_HZ.mapIndexed { idx, hz ->
             EqBandInfo(
                 index = idx,
                 centerFreqHz = hz,
-                minLevelMb = -1500,
-                maxLevelMb = 1500,
-                currentLevelMb = settings.bandGainsMb.getOrElse(idx) { 0 }.coerceIn(-1500, 1500)
+                minLevelMb = TenBandEqualizerAudioProcessor.MIN_BAND_MB,
+                maxLevelMb = TenBandEqualizerAudioProcessor.MAX_BAND_MB,
+                currentLevelMb = normalized.getOrElse(idx) { 0 }
+                    .coerceIn(TenBandEqualizerAudioProcessor.MIN_BAND_MB, TenBandEqualizerAudioProcessor.MAX_BAND_MB)
             )
         }
     }
@@ -250,26 +167,13 @@ class AudioEffectsController {
     }
 
     private fun releaseInternal() {
-        releaseEqualizer()
         releaseBassBoost()
         releaseVirtualizer()
         releaseLoudnessEnhancer()
         currentSessionId = 0
-        lastAppliedEqEnabled = null
-        lastAppliedGainsMb = null
         lastAppliedBass = null
         lastAppliedVirt = null
         lastAppliedLoudnessActive = null
-    }
-
-    private fun releaseEqualizer() {
-        runCatching { equalizer?.enabled = false }
-        runCatching { equalizer?.release() }
-        equalizer = null
-        cachedBandCount = 0
-        cachedMinMb = -1500
-        cachedMaxMb = 1500
-        cachedCenterFreqsHz = emptyList()
     }
 
     private fun releaseBassBoost() {
@@ -278,6 +182,7 @@ class AudioEffectsController {
         bassBoost = null
     }
 
+    @Suppress("DEPRECATION")
     private fun releaseVirtualizer() {
         runCatching { virtualizer?.enabled = false }
         runCatching { virtualizer?.release() }
@@ -291,8 +196,6 @@ class AudioEffectsController {
     }
 
     companion object {
-        private const val MAX_BAND_COUNT = 16
         private const val NORMALIZATION_TARGET_GAIN_MB = 350
-        private val DEFAULT_CENTERS_HZ = listOf(60, 230, 910, 3600, 14000)
     }
 }

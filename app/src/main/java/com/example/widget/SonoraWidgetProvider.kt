@@ -12,10 +12,14 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.widget.RemoteViews
+import androidx.annotation.VisibleForTesting
 import com.example.MainActivity
 import com.example.R
 import com.example.data.local.PlaybackPreferencesStore
 import com.example.playback.PlaybackService
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class SonoraWidgetProvider : AppWidgetProvider() {
 
@@ -25,24 +29,44 @@ class SonoraWidgetProvider : AppWidgetProvider() {
         appWidgetIds: IntArray
     ) {
         if (appWidgetIds.isEmpty()) return
-        val prefs = PlaybackPreferencesStore(context)
-        val saved = prefs.loadPlaybackSession()
-        val current = saved?.items?.getOrNull(saved.currentIndex)
-        updateWidgets(
-            context = context,
-            appWidgetManager = appWidgetManager,
-            appWidgetIds = appWidgetIds,
-            title = current?.title ?: context.getString(R.string.app_name),
-            artist = current?.artist ?: context.getString(R.string.widget_idle_subtitle),
-            isPlaying = false,
-            artworkUri = current?.albumArtUri,
-            audioUri = current?.contentUri
-        )
+        val appContext = context.applicationContext ?: context
+        val idsCopy = appWidgetIds.copyOf()
+        val pendingResult = runCatching { goAsync() }.getOrNull()
+        widgetExecutor.execute {
+            try {
+                val prefs = PlaybackPreferencesStore(appContext)
+                val saved = prefs.loadPlaybackSession()
+                val current = saved?.items?.getOrNull(saved.currentIndex)
+                updateWidgets(
+                    context = appContext,
+                    appWidgetManager = appWidgetManager,
+                    appWidgetIds = idsCopy,
+                    title = current?.title ?: appContext.getString(R.string.app_name),
+                    artist = current?.artist ?: appContext.getString(R.string.widget_idle_subtitle),
+                    isPlaying = false,
+                    artworkUri = current?.albumArtUri,
+                    audioUri = current?.contentUri
+                )
+            } finally {
+                runCatching { pendingResult?.finish() }
+            }
+        }
     }
 
     companion object {
         private const val WIDGET_ART_MAX_PX = 160
         private const val MAX_WIDGET_STREAM_BYTES = 4 * 1024 * 1024
+        private val widgetExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "sonora-widget-worker").apply { isDaemon = true }
+        }
+
+        @VisibleForTesting
+        internal fun awaitPendingWidgetUpdatesForTest(timeoutMs: Long = 3_000L): Boolean {
+            return runCatching {
+                widgetExecutor.submit {}.get(timeoutMs, TimeUnit.MILLISECONDS)
+                true
+            }.getOrDefault(false)
+        }
 
         fun setAllWidgetsPaused(
             context: Context,

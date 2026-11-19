@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
@@ -49,7 +50,6 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -458,7 +458,7 @@ fun TrackRow(
                 DropdownMenuItem(
                     text = { Text("Reproducir siguiente") },
                     leadingIcon = {
-                        Icon(Icons.Rounded.PlaylistPlay, contentDescription = null)
+                        Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, contentDescription = null)
                     },
                     onClick = {
                         menuExpanded = false

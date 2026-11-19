@@ -61,7 +61,8 @@ data class AudioTrack(
     val lastPlayedAt: Long = 0L,
     val replayGainDb: Float? = null,
     val filePath: String = "",
-    val isDocumentTreeTrack: Boolean = false
+    val isDocumentTreeTrack: Boolean = false,
+    val sourceTreeUri: String? = null
 )
 
 data class AudioTechSpecs(
@@ -184,20 +185,146 @@ data class LyricsData(
     val hasEmbeddedTranslation: Boolean = false
 )
 
-enum class EqPreset(val label: String, val gainsMb: List<Int>) {
-    FLAT("Plano", listOf(0, 0, 0, 0, 0)),
-    ROCK("Rock", listOf(450, 250, -100, 300, 500)),
-    JAZZ("Jazz", listOf(350, 150, -150, 250, 400)),
-    CLASSICAL("Clásica", listOf(400, 200, -100, 200, 450)),
-    VOCAL("Vocal", listOf(-200, 100, 450, 350, -100)),
-    BASS("Graves+", listOf(600, 400, 100, 0, 0)),
-    CUSTOM("Personalizado", listOf(0, 0, 0, 0, 0))
+val TEN_BAND_CENTERS_HZ = listOf(31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
+
+enum class EqPreset(val label: String, val gainsMb: List<Int>, val recommendedPreampDb: Float = 0f) {
+    FLAT("Plano", List(10) { 0 }, 0f),
+    BASS("Graves+", listOf(650, 550, 380, 150, 0, 0, 0, 100, 150, 150), -4.5f),
+    VOCAL("Vocal", listOf(-300, -200, -100, 150, 350, 480, 450, 250, 50, -150), -3.0f),
+    ROCK("Rock", listOf(450, 350, 200, -100, -150, 50, 250, 400, 500, 450), -3.5f),
+    JAZZ("Jazz", listOf(350, 250, 150, 100, -150, -100, 150, 250, 350, 400), -2.5f),
+    CLASSICAL("Clásica", listOf(400, 300, 150, 50, -100, -50, 150, 300, 400, 450), -3.0f),
+    ELECTRONIC("Electrónica", listOf(550, 450, 250, 0, -150, 100, 200, 350, 450, 500), -4.0f),
+    V_SHAPE("V-Shape", listOf(550, 450, 200, -150, -300, -250, 100, 350, 550, 500), -4.0f),
+    CUSTOM("Personalizado", List(10) { 0 }, 0f);
+
+    companion object {
+        fun normalizeToTenBands(gains: List<Int>): List<Int> {
+            return when {
+                gains.size >= 10 -> gains.take(10).map { it.coerceIn(-1200, 1200) }
+                gains.size == 5 -> listOf(
+                    gains[0],
+                    ((gains[0] + gains[1]) / 2),
+                    gains[1],
+                    ((gains[1] + gains[2]) / 2),
+                    gains[2],
+                    ((gains[2] + gains[3]) / 2),
+                    gains[3],
+                    ((gains[3] + gains[4]) / 2),
+                    gains[4],
+                    gains[4]
+                ).map { it.coerceIn(-1200, 1200) }
+                gains.isEmpty() -> List(10) { 0 }
+                else -> List(10) { idx -> gains.getOrElse(idx) { 0 }.coerceIn(-1200, 1200) }
+            }
+        }
+    }
+}
+
+data class HeadphoneEqProfile(
+    val id: String,
+    val brand: String,
+    val model: String,
+    val formFactor: String,
+    val preampDb: Float,
+    val bandGainsMb: List<Int>,
+    val isCustom: Boolean = false
+) {
+    val fullName: String get() = if (brand.isBlank()) model else "$brand $model"
+}
+
+object AutoEqProfilesCatalog {
+    val builtInProfiles: List<HeadphoneEqProfile> = listOf(
+        HeadphoneEqProfile(
+            id = "autoeq_sony_xm4",
+            brand = "Sony",
+            model = "WH-1000XM4",
+            formFactor = "Over-Ear ANC",
+            preampDb = -4.8f,
+            bandGainsMb = listOf(-150, -450, -520, -280, 120, 240, 320, 480, 360, 180)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_sony_xm5",
+            brand = "Sony",
+            model = "WH-1000XM5",
+            formFactor = "Over-Ear ANC",
+            preampDb = -4.2f,
+            bandGainsMb = listOf(-100, -380, -450, -220, 140, 260, 310, 420, 300, 150)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_airpods_pro_2",
+            brand = "Apple",
+            model = "AirPods Pro (2.ª gen)",
+            formFactor = "TWS In-Ear",
+            preampDb = -3.4f,
+            bandGainsMb = listOf(180, 120, -120, -180, 60, 220, 340, 260, 180, 220)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_galaxy_buds2_pro",
+            brand = "Samsung",
+            model = "Galaxy Buds2 Pro",
+            formFactor = "TWS In-Ear",
+            preampDb = -3.2f,
+            bandGainsMb = listOf(120, 40, -150, -120, 140, 240, 180, -140, -220, 150)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_sennheiser_hd600",
+            brand = "Sennheiser",
+            model = "HD 600",
+            formFactor = "Open-Back Estudio",
+            preampDb = -5.6f,
+            bandGainsMb = listOf(560, 420, 180, -80, -140, 40, -120, 180, 260, 320)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_ath_m50x",
+            brand = "Audio-Technica",
+            model = "ATH-M50x",
+            formFactor = "Estudio Cerrado",
+            preampDb = -4.4f,
+            bandGainsMb = listOf(220, -180, -320, -120, 180, 280, 440, 180, -240, 160)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_zsn_pro",
+            brand = "KZ",
+            model = "ZSN Pro (IEM)",
+            formFactor = "IEM Híbrido",
+            preampDb = -3.8f,
+            bandGainsMb = listOf(160, -120, -240, -100, 180, 260, -280, -360, -220, 180)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_jbl_tune_720bt",
+            brand = "JBL",
+            model = "Tune 720BT",
+            formFactor = "Over-Ear Bluetooth",
+            preampDb = -3.6f,
+            bandGainsMb = listOf(120, -220, -340, -160, 120, 240, 360, 280, 180, 140)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_bose_qc_ultra",
+            brand = "Bose",
+            model = "QuietComfort / QC Ultra",
+            formFactor = "Over-Ear ANC",
+            preampDb = -4.0f,
+            bandGainsMb = listOf(-80, -280, -360, -140, 160, 280, 350, 400, 240, 120)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_neutral_iem",
+            brand = "Harman",
+            model = "IEM Neutro Referencia",
+            formFactor = "Target Neutro",
+            preampDb = -1.5f,
+            bandGainsMb = listOf(150, 100, 0, -50, 0, 80, 150, 120, 50, 0)
+        )
+    )
 }
 
 data class AudioSettings(
     val eqEnabled: Boolean = false,
     val eqPreset: EqPreset = EqPreset.FLAT,
-    val bandGainsMb: List<Int> = listOf(0, 0, 0, 0, 0),
+    val bandGainsMb: List<Int> = List(10) { 0 },
+    val preampDb: Float = 0f,
+    val activeProfileId: String? = null,
+    val activeProfileName: String? = null,
     val bassBoostStrength: Int = 0,
     val virtualizerStrength: Int = 0,
     val crossfadeSeconds: Int = 0,

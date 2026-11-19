@@ -291,7 +291,7 @@ fun LyricsBottomSheet(
                 !isLoading &&
                 (onTranslateLyrics != null || onSaveManualTranslation != null || hasNativeBilingual)
 
-            if (showTranslationControls && lyrics != null) {
+            if (showTranslationControls) {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -1081,6 +1081,7 @@ fun FoldersExclusionSheet(
     onToggleExclude: (folderName: String, currentlyExcluded: Boolean) -> Unit,
     onDismiss: () -> Unit,
     sdCardFolders: List<SdCardFolder> = emptyList(),
+    removingSdFolders: Map<String, String> = emptyMap(),
     onAddSdCardFolder: () -> Unit = {},
     onRemoveSdCardFolder: (String) -> Unit = {}
 ) {
@@ -1151,6 +1152,33 @@ fun FoldersExclusionSheet(
                         Icon(Icons.Rounded.SdCard, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Vincular carpeta o tarjeta SD")
+                    }
+
+                    removingSdFolders.forEach { (uri, name) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp)
+                                .testTag("removing_sd_folder_row_$uri"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .testTag("removing_sd_folder_indicator_$uri"),
+                                strokeWidth = 2.dp,
+                                color = CopperAmber
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Quitando «$name» en segundo plano…",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
 
                     sdCardFolders.forEach { sd ->

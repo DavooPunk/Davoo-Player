@@ -25,8 +25,10 @@ import com.example.model.AudioSettings
 import com.example.model.AudioTrack
 import com.example.model.AudioTrackMetadata
 import com.example.model.EqBandInfo
+import com.example.model.EqPreset
 import com.example.model.FolderGroup
 import com.example.model.GenreGroup
+import com.example.model.HeadphoneEqProfile
 import com.example.model.LibraryFilter
 import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
@@ -38,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -55,6 +58,7 @@ data class SonoraUiState(
     val folders: List<FolderGroup> = emptyList(),
     val excludedFolders: Set<String> = emptySet(),
     val sdCardFolders: List<SdCardFolder> = emptyList(),
+    val removingSdFolderUris: Map<String, String> = emptyMap(),
     val playlists: List<PlaylistSummary> = emptyList(),
     val favoriteTracks: List<AudioTrack> = emptyList(),
     val recentTracks: List<AudioTrack> = emptyList(),
@@ -64,6 +68,11 @@ data class SonoraUiState(
     val mp3Count: Int = 0,
     val otherCount: Int = 0,
     val searchQuery: String = "",
+    val isGlobalSearchOpen: Boolean = false,
+    val globalMatchingTracks: List<AudioTrack> = emptyList(),
+    val globalMatchingAlbums: List<AlbumGroup> = emptyList(),
+    val globalMatchingArtists: List<ArtistGroup> = emptyList(),
+    val globalMatchingPlaylists: List<PlaylistSummary> = emptyList(),
     val selectedFilter: LibraryFilter = LibraryFilter.ALL,
     val sortOrder: SortOrder = SortOrder.RECENT,
     val isScanning: Boolean = false,
@@ -93,6 +102,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private val searchQueryFlow = MutableStateFlow("")
+    private val globalSearchOpenFlow = MutableStateFlow(false)
+    private val removingSdFoldersFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     private val filterFlow = MutableStateFlow(LibraryFilter.ALL)
     private val sortOrderFlow = MutableStateFlow(SortOrder.RECENT)
     private val permissionFlow = MutableStateFlow(checkAudioPermission())
@@ -109,6 +120,9 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     private val _preferredTranslationEngine = MutableStateFlow(preferencesStore.loadTranslationEngine())
     val preferredTranslationEngine: StateFlow<TranslationEngine> = _preferredTranslationEngine
 
+    private val _customEqProfiles = MutableStateFlow(preferencesStore.loadCustomEqProfiles())
+    val customEqProfiles: StateFlow<List<HeadphoneEqProfile>> = _customEqProfiles.asStateFlow()
+
     private val lyricsTranslationCoordinator = LyricsTranslationCoordinator(
         scope = viewModelScope,
         onPersistTranslation = { trackId, language, translated ->
@@ -119,11 +133,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     private data class QueryParams(
         val search: String,
+        val isGlobalSearchOpen: Boolean,
         val filter: LibraryFilter,
         val sort: SortOrder,
         val isScanning: Boolean,
         val hasPermission: Boolean,
-        val snackbar: String?
+        val snackbar: String?,
+        val removingSdFolders: Map<String, String>
     )
 
     private data class CollectionBundle(
@@ -153,25 +169,67 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private val queryParamsFlow = combine(
-        searchQueryFlow,
-        filterFlow,
-        sortOrderFlow,
-        repository.isScanning,
-        permissionFlow
-    ) { search, filter, sort, scanning, hasPerm ->
-        QueryParams(search, filter, sort, scanning, hasPerm, null)
-    }.combine(snackbarFlow) { params, snack ->
-        params.copy(snackbar = snack)
+        combine(searchQueryFlow, globalSearchOpenFlow, filterFlow, sortOrderFlow) { search, open, filter, sort ->
+            SearchFilterTriple(search, open, filter, sort)
+        },
+        combine(repository.isScanning, permissionFlow, snackbarFlow, removingSdFoldersFlow) { scanning, hasPerm, snack, removingSd ->
+            StatusBundle(scanning, hasPerm, snack, removingSd)
+        }
+    ) { first, second ->
+        QueryParams(
+            search = first.search,
+            isGlobalSearchOpen = first.isGlobalSearchOpen,
+            filter = first.filter,
+            sort = first.sort,
+            isScanning = second.isScanning,
+            hasPermission = second.hasPermission,
+            snackbar = second.snackbar,
+            removingSdFolders = second.removingSdFolders
+        )
     }
 
+    private data class SearchFilterTriple(
+        val search: String,
+        val isGlobalSearchOpen: Boolean,
+        val filter: LibraryFilter,
+        val sort: SortOrder
+    )
+
+    private data class StatusBundle(
+        val isScanning: Boolean,
+        val hasPermission: Boolean,
+        val snackbar: String?,
+        val removingSdFolders: Map<String, String>
+    )
+
     private val collectionBundleFlow = combine(
-        repository.allTracksFlow,
-        repository.unfilteredTracksFlow,
-        repository.excludedFoldersFlow,
-        repository.playlistsFlow,
-        repository.sdCardFoldersFlow
-    ) { visible, unfiltered, excluded, playlists, sdFolders ->
-        CollectionBundle(visible, unfiltered, excluded, playlists, sdFolders)
+        combine(
+            repository.allTracksFlow,
+            repository.unfilteredTracksFlow,
+            repository.excludedFoldersFlow,
+            repository.playlistsFlow,
+            repository.sdCardFoldersFlow
+        ) { visible, unfiltered, excluded, playlists, sdFolders ->
+            CollectionBundle(visible, unfiltered, excluded, playlists, sdFolders)
+        },
+        removingSdFoldersFlow
+    ) { bundle, removingMap ->
+        if (removingMap.isEmpty()) {
+            bundle
+        } else {
+            val removingUris = removingMap.keys
+            val removingNames = removingMap.values.toHashSet()
+            val filterOut: (AudioTrack) -> Boolean = { track ->
+                track.sourceTreeUri in removingUris ||
+                    removingUris.any { uri -> track.contentUri.startsWith(uri) } ||
+                    (track.isDocumentTreeTrack && track.folderName in removingNames)
+            }
+            bundle.copy(
+                visibleTracks = bundle.visibleTracks.filterNot(filterOut),
+                unfilteredTracks = bundle.unfilteredTracks.filterNot(filterOut),
+                sdCardFolders = bundle.sdCardFolders.filterNot { it.treeUri in removingUris }
+            )
+        }
     }
 
     private val derivedCollectionsFlow = collectionBundleFlow.map { bundle ->
@@ -328,6 +386,42 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         filteredTracksFlow,
         queryParamsFlow
     ) { derived, filtered, params ->
+        val query = params.search.trim().lowercase()
+        val matchingTracks = if (query.isEmpty()) {
+            emptyList()
+        } else {
+            derived.allTracks.filter { track ->
+                track.title.lowercase().contains(query) ||
+                    track.artist.lowercase().contains(query) ||
+                    track.album.lowercase().contains(query) ||
+                    track.folderName.lowercase().contains(query) ||
+                    track.genre.lowercase().contains(query)
+            }.take(40)
+        }
+        val matchingAlbums = if (query.isEmpty()) {
+            emptyList()
+        } else {
+            derived.albums.filter { album ->
+                album.albumName.lowercase().contains(query) ||
+                    album.artist.lowercase().contains(query)
+            }
+        }
+        val matchingArtists = if (query.isEmpty()) {
+            emptyList()
+        } else {
+            derived.artists.filter { artist ->
+                artist.artistName.lowercase().contains(query)
+            }
+        }
+        val matchingPlaylists = if (query.isEmpty()) {
+            emptyList()
+        } else {
+            derived.playlists.filter { playlist ->
+                playlist.name.lowercase().contains(query) ||
+                    playlist.description.lowercase().contains(query)
+            }
+        }
+
         SonoraUiState(
             allTracks = derived.allTracks,
             filteredTracks = filtered,
@@ -337,6 +431,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
             folders = derived.folders,
             excludedFolders = derived.excludedFolders,
             sdCardFolders = derived.sdCardFolders,
+            removingSdFolderUris = params.removingSdFolders,
             playlists = derived.playlists,
             favoriteTracks = derived.favoriteTracks,
             recentTracks = derived.recentTracks,
@@ -346,6 +441,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
             mp3Count = derived.mp3Count,
             otherCount = derived.otherCount,
             searchQuery = params.search,
+            isGlobalSearchOpen = params.isGlobalSearchOpen,
+            globalMatchingTracks = matchingTracks,
+            globalMatchingAlbums = matchingAlbums,
+            globalMatchingArtists = matchingArtists,
+            globalMatchingPlaylists = matchingPlaylists,
             selectedFilter = params.filter,
             sortOrder = params.sort,
             isScanning = params.isScanning,
@@ -402,9 +502,19 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun removeSdCardFolder(treeUri: String) {
+        val displayName = uiState.value.sdCardFolders
+            .firstOrNull { it.treeUri == treeUri }
+            ?.displayName
+            ?: "Carpeta SD"
+        // Optimistic immediate UI update without blocking the rest of the app
+        removingSdFoldersFlow.value = removingSdFoldersFlow.value + (treeUri to displayName)
         viewModelScope.launch {
-            repository.removeSdCardFolder(treeUri)
-            snackbarFlow.value = "Carpeta de tarjeta SD desvinculada"
+            try {
+                repository.removeSdCardFolder(treeUri)
+                snackbarFlow.value = "Carpeta «$displayName» quitada"
+            } finally {
+                removingSdFoldersFlow.value = removingSdFoldersFlow.value - treeUri
+            }
         }
     }
 
@@ -419,6 +529,19 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
                 "Solo se admiten formatos de audio compatibles (MP3, FLAC, WAV, AAC, OGG)"
             }
         }
+    }
+
+    fun openGlobalSearch() {
+        globalSearchOpenFlow.value = true
+    }
+
+    fun closeGlobalSearch() {
+        globalSearchOpenFlow.value = false
+        searchQueryFlow.value = ""
+    }
+
+    fun toggleGlobalSearch() {
+        if (globalSearchOpenFlow.value) closeGlobalSearch() else openGlobalSearch()
     }
 
     fun updateSearchQuery(query: String) {
@@ -480,6 +603,43 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     // DSP, EQ & Sleep Timer
     fun updateAudioSettings(newSettings: AudioSettings, immediate: Boolean = true) {
         playbackController.updateAudioSettings(newSettings, immediate = immediate)
+    }
+
+    fun saveCustomEqProfile(name: String, settings: AudioSettings) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val profile = HeadphoneEqProfile(
+            id = "custom_${System.currentTimeMillis()}",
+            brand = "Personal",
+            model = trimmed,
+            formFactor = "Perfil guardado",
+            preampDb = settings.preampDb.coerceIn(-12f, 12f),
+            bandGainsMb = EqPreset.normalizeToTenBands(settings.bandGainsMb),
+            isCustom = true
+        )
+        _customEqProfiles.value = preferencesStore.saveCustomEqProfile(profile)
+        updateAudioSettings(
+            settings.copy(
+                eqEnabled = true,
+                eqPreset = EqPreset.CUSTOM,
+                activeProfileId = profile.id,
+                activeProfileName = profile.fullName
+            ),
+            immediate = true
+        )
+        snackbarFlow.value = "Perfil «$trimmed» guardado"
+    }
+
+    fun deleteCustomEqProfile(profileId: String) {
+        _customEqProfiles.value = preferencesStore.deleteCustomEqProfile(profileId)
+        val current = audioSettings.value
+        if (current.activeProfileId == profileId) {
+            updateAudioSettings(
+                current.copy(activeProfileId = null, activeProfileName = null),
+                immediate = true
+            )
+        }
+        snackbarFlow.value = "Perfil personalizado eliminado"
     }
 
     fun startSleepTimer(minutes: Int?, afterCurrentTrack: Boolean) {

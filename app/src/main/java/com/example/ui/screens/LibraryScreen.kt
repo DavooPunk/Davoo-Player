@@ -2,10 +2,6 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +26,6 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Checklist
-import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
@@ -46,14 +41,11 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,17 +54,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -89,8 +76,6 @@ import com.example.ui.components.TrackRow
 import com.example.ui.theme.CopperAmber
 import com.example.ui.theme.LosslessCyan
 import com.example.ui.viewmodel.SonoraUiState
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.launch
 
 @Composable
 fun LibraryScreen(
@@ -99,7 +84,8 @@ fun LibraryScreen(
     onRequestPermission: () -> Unit,
     onImportFiles: () -> Unit,
     onOpenSettings: () -> Unit = {},
-    onSearchChange: (String) -> Unit,
+    onOpenGlobalSearch: () -> Unit = {},
+    @Suppress("UNUSED_PARAMETER") onSearchChange: (String) -> Unit = {},
     onSelectSortOrder: (SortOrder) -> Unit,
     onPlayTrack: (List<AudioTrack>, Int) -> Unit,
     onShuffleAll: (List<AudioTrack>) -> Unit,
@@ -118,8 +104,6 @@ fun LibraryScreen(
 ) {
     var sortMenuExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
-    val searchFocusRequester = remember { FocusRequester() }
 
     // Multi-selection state
     var isSelectionMode by remember { mutableStateOf(false) }
@@ -148,31 +132,9 @@ fun LibraryScreen(
         selectedTrackIds = emptySet()
     }
 
-    // Detect when user is scrolled below the search bar & whether scrolling back up
-    var isScrollingUp by remember { mutableStateOf(false) }
-    var prevIndex by remember { mutableIntStateOf(0) }
-    var prevOffset by remember { mutableIntStateOf(0) }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-            .distinctUntilChanged()
-            .collect { (idx, offset) ->
-                val movingUp = idx < prevIndex || (idx == prevIndex && offset < prevOffset - 4)
-                val movingDown = idx > prevIndex || (idx == prevIndex && offset > prevOffset + 4)
-                if (movingUp) isScrollingUp = true
-                else if (movingDown) isScrollingUp = false
-                prevIndex = idx
-                prevOffset = offset
-            }
-    }
-
-    val searchBarItemIndex = if (!uiState.hasAudioPermission) 2 else 1
-    val isBelowSearchBar by remember(listState, searchBarItemIndex) {
-        derivedStateOf { listState.firstVisibleItemIndex > searchBarItemIndex }
-    }
-    val headerItemCount = 1 +
+    val headerItemCount =
         (if (!uiState.hasAudioPermission) 1 else 0) +
-        1 + // search_bar
-        (if (uiState.filteredTracks.isNotEmpty()) 1 else 0) // actions_strip
+        (if (uiState.filteredTracks.isNotEmpty()) 1 else 0)
 
     Column(
         modifier = modifier
@@ -292,6 +254,98 @@ fun LibraryScreen(
             }
         }
 
+        // Fixed Top Header with always-visible top-right Search & Settings buttons
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "DAVOO PLAYER",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Tu Música",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (uiState.isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 1.8.dp
+                        )
+                    }
+                    Text(
+                        text = if (uiState.isScanning) {
+                            "Actualizando biblioteca…"
+                        } else {
+                            val count = uiState.allTracks.size
+                            "$count ${if (count == 1) "canción" else "canciones"}"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    onClick = onOpenSettings,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("library_settings_button")
+                ) {
+                    Box(
+                        modifier = Modifier.size(44.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Settings,
+                            contentDescription = "Abrir opciones",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                Surface(
+                    onClick = onOpenGlobalSearch,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("header_search_button")
+                ) {
+                    Box(
+                        modifier = Modifier.size(44.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Search,
+                            contentDescription = "Buscar en toda la biblioteca",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             LazyColumn(
                 state = listState,
@@ -301,78 +355,11 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 20.dp,
-                    top = 12.dp,
+                    top = 4.dp,
                     bottom = bottomContentPadding.calculateBottomPadding() + 76.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Clean, Minimal Main Hub Header with single Settings gear button
-                item(key = "header", contentType = "header") {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp, bottom = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "DAVOO PLAYER",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "Tu Música",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (uiState.isScanning) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(12.dp),
-                                        strokeWidth = 1.8.dp
-                                    )
-                                }
-                                Text(
-                                    text = if (uiState.isScanning) {
-                                        "Actualizando biblioteca…"
-                                    } else {
-                                        val count = uiState.allTracks.size
-                                        "$count ${if (count == 1) "canción" else "canciones"}"
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        Surface(
-                            onClick = onOpenSettings,
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .testTag("library_settings_button")
-                        ) {
-                            Box(
-                                modifier = Modifier.size(44.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Settings,
-                                    contentDescription = "Abrir opciones",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-                    }
-                }
 
                 // Permission card if system audio permission is not yet granted
                 if (!uiState.hasAudioPermission) {
@@ -432,42 +419,6 @@ fun LibraryScreen(
                             }
                         }
                     }
-                }
-
-                // Clean Search input
-                item(key = "search_bar", contentType = "search") {
-                    OutlinedTextField(
-                        value = uiState.searchQuery,
-                        onValueChange = onSearchChange,
-                        placeholder = {
-                            Text(
-                                text = stringResource(R.string.search_placeholder),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(Icons.Rounded.Search, contentDescription = null)
-                        },
-                        trailingIcon = {
-                            if (uiState.searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { onSearchChange("") }) {
-                                    Icon(Icons.Rounded.Clear, contentDescription = "Limpiar búsqueda")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(searchFocusRequester)
-                            .testTag("library_search_input")
-                    )
                 }
 
                 // Unified Playback + Sort + Multi-select strip (no MP3/FLAC clutter)
@@ -667,43 +618,6 @@ fun LibraryScreen(
                 },
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
-
-            // Quick-search magnifying glass when scrolled deep in the list
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isBelowSearchBar && !isSelectionMode && uiState.filteredTracks.isNotEmpty(),
-                enter = fadeIn() + scaleIn(initialScale = 0.85f),
-                exit = fadeOut() + scaleOut(targetScale = 0.85f),
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(
-                        end = 30.dp,
-                        bottom = bottomContentPadding.calculateBottomPadding() + 14.dp
-                    )
-            ) {
-                ExtendedFloatingActionButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            if (listState.firstVisibleItemIndex > searchBarItemIndex + 12) {
-                                listState.scrollToItem(searchBarItemIndex)
-                            } else {
-                                listState.animateScrollToItem(searchBarItemIndex)
-                            }
-                            runCatching { searchFocusRequester.requestFocus() }
-                        }
-                    },
-                    expanded = isScrollingUp,
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Search,
-                            contentDescription = "Buscar canciones"
-                        )
-                    },
-                    text = { Text("Buscar") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.testTag("library_quick_search_fab")
-                )
-            }
         }
     }
 

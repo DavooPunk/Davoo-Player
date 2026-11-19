@@ -8,6 +8,7 @@ import androidx.media3.common.Player
 import com.example.ai.TranslationEngine
 import com.example.model.AudioSettings
 import com.example.model.EqPreset
+import com.example.model.HeadphoneEqProfile
 import com.example.model.SdCardFolder
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -38,7 +39,10 @@ data class SavedPlaybackSession(
 private data class AudioSettingsDto(
     val eqEnabled: Boolean = false,
     val eqPresetName: String = EqPreset.FLAT.name,
-    val bandGainsMb: List<Int> = listOf(0, 0, 0, 0, 0),
+    val bandGainsMb: List<Int> = List(10) { 0 },
+    val preampDb: Float = 0f,
+    val activeProfileId: String? = null,
+    val activeProfileName: String? = null,
     val bassBoostStrength: Int = 0,
     val virtualizerStrength: Int = 0,
     val crossfadeSeconds: Int = 0,
@@ -47,6 +51,14 @@ private data class AudioSettingsDto(
     val playbackSpeed: Float = 1.0f,
     val stereoBalance: Float = 0f,
     val dynamicArtworkColors: Boolean = true
+)
+
+@Serializable
+private data class CustomEqProfileDto(
+    val id: String,
+    val name: String,
+    val preampDb: Float = 0f,
+    val bandGainsMb: List<Int> = List(10) { 0 }
 )
 
 @Serializable
@@ -68,7 +80,10 @@ class PlaybackPreferencesStore(context: Context) {
             AudioSettings(
                 eqEnabled = dto.eqEnabled,
                 eqPreset = EqPreset.entries.firstOrNull { it.name == dto.eqPresetName } ?: EqPreset.FLAT,
-                bandGainsMb = dto.bandGainsMb.ifEmpty { listOf(0, 0, 0, 0, 0) },
+                bandGainsMb = EqPreset.normalizeToTenBands(dto.bandGainsMb),
+                preampDb = dto.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f,
+                activeProfileId = dto.activeProfileId,
+                activeProfileName = dto.activeProfileName,
                 bassBoostStrength = dto.bassBoostStrength.coerceIn(0, 1000),
                 virtualizerStrength = dto.virtualizerStrength.coerceIn(0, 1000),
                 crossfadeSeconds = dto.crossfadeSeconds.coerceIn(0, 12),
@@ -85,7 +100,10 @@ class PlaybackPreferencesStore(context: Context) {
         val dto = AudioSettingsDto(
             eqEnabled = settings.eqEnabled,
             eqPresetName = settings.eqPreset.name,
-            bandGainsMb = settings.bandGainsMb,
+            bandGainsMb = EqPreset.normalizeToTenBands(settings.bandGainsMb),
+            preampDb = settings.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f,
+            activeProfileId = settings.activeProfileId,
+            activeProfileName = settings.activeProfileName,
             bassBoostStrength = settings.bassBoostStrength,
             virtualizerStrength = settings.virtualizerStrength,
             crossfadeSeconds = settings.crossfadeSeconds,
@@ -97,6 +115,50 @@ class PlaybackPreferencesStore(context: Context) {
         )
         runCatching {
             prefs.edit().putString(KEY_AUDIO_SETTINGS, json.encodeToString(dto)).apply()
+        }
+    }
+
+    fun loadCustomEqProfiles(): List<HeadphoneEqProfile> {
+        val raw = prefs.getString(KEY_CUSTOM_EQ_PROFILES, null) ?: return emptyList()
+        return runCatching {
+            json.decodeFromString<List<CustomEqProfileDto>>(raw).map { dto ->
+                HeadphoneEqProfile(
+                    id = dto.id,
+                    brand = "Personal",
+                    model = dto.name,
+                    formFactor = "Perfil guardado",
+                    preampDb = dto.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f,
+                    bandGainsMb = EqPreset.normalizeToTenBands(dto.bandGainsMb),
+                    isCustom = true
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveCustomEqProfile(profile: HeadphoneEqProfile): List<HeadphoneEqProfile> {
+        val current = loadCustomEqProfiles().filterNot { it.id == profile.id }
+        val updated = listOf(profile.copy(isCustom = true, bandGainsMb = EqPreset.normalizeToTenBands(profile.bandGainsMb))) + current
+        saveCustomEqProfiles(updated)
+        return updated
+    }
+
+    fun deleteCustomEqProfile(profileId: String): List<HeadphoneEqProfile> {
+        val updated = loadCustomEqProfiles().filterNot { it.id == profileId }
+        saveCustomEqProfiles(updated)
+        return updated
+    }
+
+    private fun saveCustomEqProfiles(profiles: List<HeadphoneEqProfile>) {
+        val dtos = profiles.map {
+            CustomEqProfileDto(
+                id = it.id,
+                name = it.model,
+                preampDb = it.preampDb,
+                bandGainsMb = EqPreset.normalizeToTenBands(it.bandGainsMb)
+            )
+        }
+        runCatching {
+            prefs.edit().putString(KEY_CUSTOM_EQ_PROFILES, json.encodeToString(dtos)).apply()
         }
     }
 
@@ -184,6 +246,7 @@ class PlaybackPreferencesStore(context: Context) {
     companion object {
         private const val PREFS_NAME = "sonora_audio_prefs"
         private const val KEY_AUDIO_SETTINGS = "audio_settings_json"
+        private const val KEY_CUSTOM_EQ_PROFILES = "custom_eq_profiles_json"
         private const val KEY_SAVED_SESSION = "saved_playback_session_json"
         private const val KEY_SD_TREE_FOLDERS = "sd_tree_folders_json"
         private const val KEY_TRANSLATION_ENGINE = "preferred_translation_engine"

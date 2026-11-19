@@ -14,11 +14,11 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.sonoramusic.vkmqrx"
+    applicationId = "com.aistudio.sonoramusic.vfkcrq"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "2.0.0"
+    versionCode = 6
+    versionName = "2.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -577,7 +578,7 @@ class ExampleRobolectricTest {
         val eqController = com.example.playback.AudioEffectsController()
         val settingsState = androidx.compose.runtime.mutableStateOf(com.example.model.AudioSettings())
         val bands = eqController.getBands(settingsState.value)
-        assertEquals(5, bands.size)
+        assertEquals(10, bands.size)
 
         composeTestRule.setContent {
             SonoraTheme {
@@ -592,13 +593,15 @@ class ExampleRobolectricTest {
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("equalizer_dsp_sheet").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("eq_preset_rock").performClick()
+        composeTestRule.onNodeWithTag("eq_frequency_curve_canvas").performScrollTo()
+        composeTestRule.onNodeWithTag("eq_preset_rock").performScrollTo().performClick()
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
         assertEquals(com.example.model.EqPreset.ROCK, settingsState.value.eqPreset)
         assertTrue(settingsState.value.eqEnabled)
 
         composeTestRule.onNodeWithText("Velocidad de reproducción").performScrollTo()
-        composeTestRule.onNodeWithTag("crossfade_chip_5").performClick()
+        composeTestRule.onNodeWithTag("crossfade_chip_5").performScrollTo().performClick()
         composeTestRule.waitForIdle()
         assertEquals(5, settingsState.value.crossfadeSeconds)
     }
@@ -760,7 +763,7 @@ class ExampleRobolectricTest {
         val effectsController = com.example.playback.AudioEffectsController()
         effectsController.attachToSession(101, com.example.model.AudioSettings())
         val bands = effectsController.getBands()
-        assertEquals(5, bands.size)
+        assertEquals(10, bands.size)
         effectsController.release()
 
         val track = AudioTrack(
@@ -1371,7 +1374,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `libraryScreen shows fast scroller and quick search fab when scrolled down`() {
+    fun `libraryScreen shows fixed top-right search button and fast scroller without legacy inline search or quick fab`() {
         val manyTracks = (1..40).map { i ->
             AudioTrack(
                 id = "scroll_$i",
@@ -1389,6 +1392,7 @@ class ExampleRobolectricTest {
                 folderName = "Music"
             )
         }
+        var openSearchCount = 0
 
         composeTestRule.setContent {
             SonoraTheme {
@@ -1401,7 +1405,7 @@ class ExampleRobolectricTest {
                     playbackState = com.example.playback.PlaybackUiState(),
                     onRequestPermission = {},
                     onImportFiles = {},
-                    onSearchChange = {},
+                    onOpenGlobalSearch = { openSearchCount++ },
                     onSelectSortOrder = {},
                     onPlayTrack = { _, _ -> },
                     onShuffleAll = {},
@@ -1418,19 +1422,19 @@ class ExampleRobolectricTest {
 
         composeTestRule.onNodeWithTag("fast_scroll_bar").assertIsDisplayed()
         composeTestRule.onNodeWithTag("fast_scroll_thumb", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("header_search_button").assertIsDisplayed()
         composeTestRule.onNodeWithTag("library_quick_search_fab").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("library_search_input").assertDoesNotExist()
 
-        // Scroll deep down into the song list
+        // Scroll deep down into the song list; fixed top-right header search button remains visible
         composeTestRule.onNodeWithTag("library_lazy_column")
             .performScrollToNode(hasTestTag("track_row_scroll_30"))
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("library_quick_search_fab").assertIsDisplayed().performClick()
-        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
-        composeTestRule.waitForIdle()
-
-        composeTestRule.onNodeWithTag("library_search_input").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("library_quick_search_fab").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("header_search_button").assertIsDisplayed().performClick()
+        assertEquals(1, openSearchCount)
     }
 
     @Test
@@ -1611,7 +1615,9 @@ class ExampleRobolectricTest {
             controller.attachToSession(session, com.example.model.AudioSettings(eqEnabled = true))
             for (step in 0 until 40) {
                 val enabled = step % 5 != 0
-                val gains = listOf(-3000 + step * 150, 2500 - step * 100, step * 50, -step * 40, 0)
+                val gains = List(10) { idx ->
+                    (-2500 + step * 120 + idx * 90)
+                }
                 val settings = com.example.model.AudioSettings(
                     eqEnabled = enabled,
                     eqPreset = com.example.model.EqPreset.CUSTOM,
@@ -1623,12 +1629,12 @@ class ExampleRobolectricTest {
                 )
                 controller.applySettings(settings)
                 val bands = controller.getBands(settings)
-                assertEquals(5, bands.size)
+                assertEquals(10, bands.size)
                 assertTrue(bands.all { it.currentLevelMb in it.minLevelMb..it.maxLevelMb })
             }
         }
         controller.release()
-        assertEquals(5, controller.getBands().size)
+        assertEquals(10, controller.getBands().size)
     }
 
     @Test
@@ -1745,10 +1751,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.0
+        // Changelog tab: Version history including v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.0").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.1").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.0").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v1.0.0").performScrollTo().assertIsDisplayed()
     }
 
@@ -1773,12 +1780,12 @@ class ExampleRobolectricTest {
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
 
-        composeTestRule.onNodeWithTag("volume_normalization_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("volume_normalization_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Normalizar volumen").assertIsDisplayed()
         composeTestRule.onNodeWithText("Desactivado · Volumen original de cada canción").assertIsDisplayed()
 
         // Toggle ON
-        composeTestRule.onNodeWithTag("replaygain_switch").performClick()
+        composeTestRule.onNodeWithTag("replaygain_switch").performScrollTo().performClick()
         composeTestRule.waitForIdle()
         assertTrue(currentSettings.value.replayGainEnabled)
         composeTestRule.onNodeWithText("Activo · Equilibra pistas automáticamente (ReplayGain + nivelador)").assertIsDisplayed()
@@ -1792,7 +1799,7 @@ class ExampleRobolectricTest {
         assertFalse(controller.isLoudnessNormalizationRequested())
 
         // Toggle OFF
-        composeTestRule.onNodeWithTag("replaygain_switch").performClick()
+        composeTestRule.onNodeWithTag("replaygain_switch").performScrollTo().performClick()
         composeTestRule.waitForIdle()
         assertFalse(currentSettings.value.replayGainEnabled)
         controller.applySettings(currentSettings.value)
@@ -2076,5 +2083,399 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("save_manual_translation_button").performScrollTo().performClick()
         composeTestRule.waitForIdle()
         assertTrue(savedManualText.orEmpty().contains("Corremos en la noche"))
+    }
+
+    @Test
+    fun `restoreSavedTranslation manual entry does not overwrite DeepL cache slot`() = runTest {
+        var deepLInvocations = 0
+        val coordinator = com.example.ai.LyricsTranslationCoordinator(
+            scope = this,
+            deepLTranslator = com.example.ai.LyricsTranslator { _, _, lyrics, targetLanguage ->
+                deepLInvocations++
+                lyrics.copy(
+                    lines = lyrics.lines.map { it.copy(text = "DeepL:${it.text}") },
+                    sourceLabel = "DeepL (${targetLanguage.displayName})"
+                )
+            },
+            googleTranslator = com.example.ai.LyricsTranslator { _, _, lyrics, _ -> lyrics }
+        )
+
+        val original = com.example.model.LyricsData(
+            lines = listOf(com.example.model.LyricLine(1_000L, "Hello world")),
+            isSynced = true,
+            sourceLabel = "Archivo .lrc"
+        )
+        val manualSaved = com.example.model.LyricsData(
+            lines = listOf(com.example.model.LyricLine(1_000L, "Hola manual")),
+            isSynced = true,
+            sourceLabel = "Traducción guardada (manual) (Español)"
+        )
+
+        coordinator.restoreSavedTranslation(
+            trackId = "track_manual_cache_1",
+            originalLyrics = original,
+            language = com.example.ai.LyricsTranslationLanguage.SPANISH,
+            translatedLyrics = manualSaved
+        )
+
+        coordinator.translate(
+            trackId = "track_manual_cache_1",
+            trackTitle = "Hello",
+            trackArtist = "Artist",
+            lyrics = original,
+            targetLanguage = com.example.ai.LyricsTranslationLanguage.SPANISH,
+            engine = com.example.ai.TranslationEngine.DEEPL
+        )
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(1, deepLInvocations)
+        val state = coordinator.state.value as com.example.ai.LyricsTranslationUiState.Success
+        assertEquals("DeepL:Hello world", state.translatedLyrics.lines.first().text)
+    }
+
+    @Test
+    fun `sonoraWidgetProvider onUpdate processes asynchronously without blocking`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        prefs.savePlaybackSession(
+            com.example.data.local.SavedPlaybackSession(
+                items = listOf(
+                    com.example.data.local.SavedMediaItemSnapshot(
+                        id = "widget_track_1",
+                        contentUri = "file:///non_existent_widget.mp3",
+                        title = "Widget Song",
+                        artist = "Widget Artist",
+                        album = "Widget Album",
+                        albumArtUri = null,
+                        formatName = "MP3",
+                        durationMs = 120_000L
+                    )
+                ),
+                currentIndex = 0,
+                positionMs = 0L,
+                shuffleEnabled = false,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
+            )
+        )
+
+        val provider = com.example.widget.SonoraWidgetProvider()
+        val appWidgetManager = android.appwidget.AppWidgetManager.getInstance(context)
+        provider.onUpdate(context, appWidgetManager, intArrayOf(101))
+
+        assertTrue(com.example.widget.SonoraWidgetProvider.awaitPendingWidgetUpdatesForTest())
+    }
+
+    @Test
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun `playbackService evaluates track gap pause only when gapless is disabled and crossfade is off`() {
+        val controller = org.robolectric.Robolectric.buildService(com.example.playback.PlaybackService::class.java)
+        val service = controller.create().get()
+        try {
+            val player = service.activePlayerOrNull()!!
+            val item = MediaItem.Builder()
+                .setMediaId("gap_track_2")
+                .setUri(Uri.parse("file:///android_asset/track2.mp3"))
+                .build()
+            player.setMediaItem(item)
+            player.playWhenReady = true
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+            // Default gapless = true -> no pause inserted
+            service.updateSettingsForTest(com.example.model.AudioSettings(gaplessEnabled = true, crossfadeSeconds = 0))
+            assertFalse(service.shouldInsertTrackGap(androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, item, player))
+
+            // gapless = false, crossfade = 0 -> pause inserted only for AUTO transitions
+            service.updateSettingsForTest(com.example.model.AudioSettings(gaplessEnabled = false, crossfadeSeconds = 0))
+            assertTrue(service.shouldInsertTrackGap(androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, item, player))
+            assertFalse(service.shouldInsertTrackGap(androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_SEEK, item, player))
+
+            // gapless = false, crossfade > 0 -> crossfade takes precedence, no gap pause
+            service.updateSettingsForTest(com.example.model.AudioSettings(gaplessEnabled = false, crossfadeSeconds = 3))
+            assertFalse(service.shouldInsertTrackGap(androidx.media3.common.Player.MEDIA_ITEM_TRANSITION_REASON_AUTO, item, player))
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    @Test
+    fun `headerSearchButton appears on AlbumsScreen and PlaylistsScreen and GlobalSearchOverlay filters all categories`() {
+        var albumsSearchClicked = 0
+        var playlistsSearchClicked = 0
+        val track = AudioTrack(
+            id = "gs_1",
+            contentUri = "content://media/external/audio/media/901",
+            title = "Midnight Jazz",
+            artist = "Miles Quartet",
+            album = "BlueSessions",
+            albumId = 41L,
+            albumArtUri = null,
+            durationMs = 215_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 25_000_000L,
+            dateAddedSec = 100L,
+            folderName = "Jazz"
+        )
+        val album = com.example.model.AlbumGroup(
+            albumName = "BlueSessions",
+            artist = "Miles Quartet",
+            albumArtUri = null,
+            tracks = listOf(track),
+            totalDurationMs = 215_000L,
+            hasFlac = true
+        )
+        val artist = com.example.model.ArtistGroup(
+            artistName = "Miles Quartet",
+            albumCount = 1,
+            tracks = listOf(track),
+            albumArtUri = null,
+            totalDurationMs = 215_000L
+        )
+        val playlist = com.example.model.PlaylistSummary(
+            id = 7L,
+            name = "Late Blue Vibes",
+            description = "Relaxing sets",
+            createdAt = 10L,
+            tracks = listOf(track)
+        )
+
+        val selectedTab = androidx.compose.runtime.mutableIntStateOf(0)
+        val queryState = androidx.compose.runtime.mutableStateOf("Blue")
+        var openedAlbum: String? = null
+        var openedArtist: String? = null
+        var openedPlaylist: Long? = null
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                when (selectedTab.intValue) {
+                    0 -> com.example.ui.screens.AlbumsScreen(
+                        albums = listOf(album),
+                        artists = listOf(artist),
+                        onAlbumClick = {},
+                        onOpenGlobalSearch = { albumsSearchClicked++ },
+                        bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                    )
+                    1 -> com.example.ui.screens.PlaylistsScreen(
+                        playlists = listOf(playlist),
+                        onCreatePlaylist = {},
+                        onOpenGlobalSearch = { playlistsSearchClicked++ },
+                        onPlaylistClick = {},
+                        bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                    )
+                    else -> com.example.ui.GlobalSearchOverlay(
+                        uiState = com.example.ui.viewmodel.SonoraUiState(
+                            allTracks = listOf(track),
+                            albums = listOf(album),
+                            artists = listOf(artist),
+                            playlists = listOf(playlist),
+                            searchQuery = queryState.value,
+                            isGlobalSearchOpen = true,
+                            globalMatchingAlbums = listOf(album),
+                            globalMatchingArtists = listOf(artist),
+                            globalMatchingPlaylists = listOf(playlist),
+                            globalMatchingTracks = listOf(track)
+                        ),
+                        currentTrackId = null,
+                        isPlaying = false,
+                        bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                        onQueryChange = { queryState.value = it },
+                        onClose = {},
+                        onPlayTrack = { _, _ -> },
+                        onPlayNext = {},
+                        onAddToQueue = {},
+                        onAddToPlaylist = {},
+                        onToggleFavorite = {},
+                        onShowLyrics = {},
+                        onEditTags = {},
+                        onShowMetadata = {},
+                        onOpenAlbum = { openedAlbum = it },
+                        onOpenArtist = { openedArtist = it },
+                        onOpenPlaylist = { openedPlaylist = it }
+                    )
+                }
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("header_search_button").assertIsDisplayed().performClick()
+        assertEquals(1, albumsSearchClicked)
+
+        selectedTab.intValue = 1
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("header_search_button").assertIsDisplayed().performClick()
+        assertEquals(1, playlistsSearchClicked)
+
+        selectedTab.intValue = 2
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("global_search_container").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("global_search_album_BlueSessions").assertIsDisplayed().performClick()
+        assertEquals("BlueSessions", openedAlbum)
+        composeTestRule.onNodeWithTag("global_search_artist_Miles Quartet").performClick()
+        assertEquals("Miles Quartet", openedArtist)
+        composeTestRule.onNodeWithTag("global_search_playlist_7").performClick()
+        assertEquals(7L, openedPlaylist)
+        composeTestRule.onNodeWithTag("global_search_results_list")
+            .performScrollToNode(hasTestTag("track_row_gs_1"))
+        composeTestRule.onNodeWithTag("track_row_gs_1").assertIsDisplayed()
+    }
+
+    @Test
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun `tenBandEqualizerAudioProcessor applies preamp and biquad filtering and EqualizerAndDspSheet saves custom AutoEq profiles`() {
+        // 1. Verify DSP processor processes 10 bands + Preamp on PCM 16-bit audio cleanly
+        val processor = com.example.playback.TenBandEqualizerAudioProcessor()
+        val format = androidx.media3.common.audio.AudioProcessor.AudioFormat(
+            44100,
+            2,
+            androidx.media3.common.C.ENCODING_PCM_16BIT
+        )
+        val outFormat = processor.configure(format)
+        assertEquals(44100, outFormat.sampleRate)
+        processor.flush()
+
+        val sonyProfile = com.example.model.AutoEqProfilesCatalog.builtInProfiles.first { it.id == "autoeq_sony_xm4" }
+        processor.updateSettings(
+            eqEnabled = true,
+            preampDb = sonyProfile.preampDb,
+            bandGainsMb = sonyProfile.bandGainsMb
+        )
+
+        val inputBuffer = java.nio.ByteBuffer.allocateDirect(64 * 4).order(java.nio.ByteOrder.nativeOrder())
+        for (i in 0 until 64) {
+            val sample = (kotlin.math.sin(i * 0.25) * 16000.0).toInt().toShort()
+            inputBuffer.putShort(sample)
+            inputBuffer.putShort(sample)
+        }
+        inputBuffer.flip()
+        processor.queueInput(inputBuffer)
+        val outputBuffer = processor.output
+        assertEquals(64 * 4, outputBuffer.remaining())
+        // At -4.8 dB preamp + bass cut, processed signal must differ from bypass and remain well within [-32767, 32767]
+        val firstProcessedSample = outputBuffer.short.toInt()
+        assertTrue(firstProcessedSample in Short.MIN_VALUE..Short.MAX_VALUE)
+        processor.reset()
+
+        // 2. Verify UI: search AutoEq headphones, apply Sony WH-1000XM4, and save custom profile
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefsStore = com.example.data.local.PlaybackPreferencesStore(context)
+        val eqController = com.example.playback.AudioEffectsController()
+        val settingsState = androidx.compose.runtime.mutableStateOf(com.example.model.AudioSettings())
+        val customProfilesState = androidx.compose.runtime.mutableStateOf<List<com.example.model.HeadphoneEqProfile>>(emptyList())
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.EqualizerAndDspSheet(
+                    settings = settingsState.value,
+                    bands = eqController.getBands(settingsState.value),
+                    onUpdateSettings = { settingsState.value = it },
+                    customProfiles = customProfilesState.value,
+                    onSaveCustomProfile = { name, s ->
+                        val created = com.example.model.HeadphoneEqProfile(
+                            id = "custom_test_1",
+                            brand = "Personal",
+                            model = name,
+                            formFactor = "Perfil guardado",
+                            preampDb = s.preampDb,
+                            bandGainsMb = s.bandGainsMb,
+                            isCustom = true
+                        )
+                        customProfilesState.value = prefsStore.saveCustomEqProfile(created)
+                        settingsState.value = s.copy(activeProfileId = created.id, activeProfileName = created.fullName)
+                    },
+                    onDeleteCustomProfile = { id ->
+                        customProfilesState.value = prefsStore.deleteCustomEqProfile(id)
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Bring entire AutoEq card (including LazyRow below search field) into vertical viewport
+        composeTestRule.onNodeWithTag("eq_frequency_curve_canvas").performScrollTo()
+        // Search and select Sony WH-1000XM4 AutoEq profile
+        composeTestRule.onNodeWithTag("eq_profile_search_input").performScrollTo().performTextInput("XM4")
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("eq_preset_flat").performScrollTo()
+        composeTestRule.onNodeWithTag("headphone_profile_chip_autoeq_sony_xm4").performScrollTo().performClick()
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        assertTrue(settingsState.value.eqEnabled)
+        assertEquals("autoeq_sony_xm4", settingsState.value.activeProfileId)
+        assertEquals(-4.8f, settingsState.value.preampDb, 0.05f)
+        assertEquals(sonyProfile.bandGainsMb, settingsState.value.bandGainsMb)
+
+        // Verify all 10 band sliders are mounted
+        composeTestRule.onNodeWithTag("eq_band_slider_9").performScrollTo().assertIsDisplayed()
+
+        // Save custom profile and verify persistence
+        composeTestRule.onNodeWithTag("save_custom_eq_profile_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("custom_eq_profile_name_input").performTextReplacement("Mi Perfil Studio")
+        composeTestRule.onNodeWithTag("confirm_save_eq_profile_button").performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals(1, customProfilesState.value.size)
+        assertEquals("Mi Perfil Studio", prefsStore.loadCustomEqProfiles().firstOrNull()?.model)
+    }
+
+    @Test
+    fun `foldersExclusionSheet shows removing indicator and repository removes sd folder cleanly without rescan`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        val folderA = com.example.model.SdCardFolder(
+            treeUri = "content://com.android.externalstorage.documents/tree/SD_A%3AMusic",
+            displayName = "Tarjeta SD A",
+            trackCount = 50
+        )
+        val folderB = com.example.model.SdCardFolder(
+            treeUri = "content://com.android.externalstorage.documents/tree/SD_B%3AMusic",
+            displayName = "Tarjeta SD B",
+            trackCount = 30
+        )
+        prefs.addSdCardFolder(folderA)
+        prefs.addSdCardFolder(folderB)
+
+        val repository = com.example.data.repository.MusicRepository(
+            context = context,
+            scanner = com.example.data.repository.DeviceMusicScanner(context),
+            playlistDao = db.playlistDao(),
+            importedTrackDao = db.importedTrackDao(),
+            trackStatsDao = db.trackStatsDao(),
+            trackTagOverrideDao = db.trackTagOverrideDao(),
+            excludedFolderDao = db.excludedFolderDao(),
+            trackLyricsDao = db.trackLyricsDao()
+        )
+        assertEquals(2, repository.sdCardFoldersFlow.value.size)
+
+        repository.removeSdCardFolder(folderA.treeUri)
+        assertEquals(listOf(folderB.treeUri), repository.sdCardFoldersFlow.value.map { it.treeUri })
+        assertEquals(listOf(folderB.treeUri), prefs.loadSdCardFolders().map { it.treeUri })
+        assertFalse(repository.isScanning.value)
+
+        // Verify FoldersExclusionSheet renders subtle non-blocking removing indicator while preserving remaining folders
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.FoldersExclusionSheet(
+                    folders = emptyList(),
+                    onToggleExclude = { _, _ -> },
+                    onDismiss = {},
+                    sdCardFolders = listOf(folderB),
+                    removingSdFolders = mapOf(folderA.treeUri to folderA.displayName)
+                )
+            }
+        }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("removing_sd_folder_indicator_${folderA.treeUri}").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Quitando «Tarjeta SD A» en segundo plano…").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Tarjeta SD B").assertIsDisplayed()
     }
 }

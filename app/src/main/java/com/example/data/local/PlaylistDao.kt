@@ -67,6 +67,9 @@ interface ImportedTrackDao {
 
     @Query("DELETE FROM imported_tracks WHERE uri IN (:uris)")
     suspend fun deleteByUris(uris: List<String>)
+
+    @Query("DELETE FROM imported_tracks WHERE folderName = :folderName")
+    suspend fun deleteByFolderName(folderName: String)
 }
 
 @Dao
@@ -139,6 +142,9 @@ interface ExcludedFolderDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun excludeFolder(entity: ExcludedFolderEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun excludeFolders(entities: List<ExcludedFolderEntity>)
 
     @Query("DELETE FROM excluded_folders WHERE folderName = :folderName")
     suspend fun includeFolder(folderName: String)

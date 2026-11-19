@@ -18,8 +18,11 @@ import com.example.model.AudioTechSpecs
 import com.example.model.AudioTrack
 import com.example.model.AudioTrackMetadata
 import com.example.model.SdCardFolder
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.util.LruCache
 import java.io.File
@@ -407,7 +410,8 @@ class DeviceMusicScanner(private val context: Context) {
                                         year = tags.year,
                                         trackNumber = tags.trackNumber,
                                         filePath = childName,
-                                        isDocumentTreeTrack = true
+                                        isDocumentTreeTrack = true,
+                                        sourceTreeUri = rootFolder.treeUri
                                     )
                                 )
                                 rootCount++
@@ -713,6 +717,15 @@ class DeviceMusicScanner(private val context: Context) {
         private const val MAX_SD_TREE_DEPTH = 16
         private const val MAX_SD_TREE_TRACKS = 5000
         private val durationCache = LruCache<String, Long>(256)
+        private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        fun evictDurationsAsync(uris: Collection<String>) {
+            if (uris.isEmpty()) return
+            val targets = uris.toList()
+            cleanupScope.launch {
+                targets.forEach { uri -> durationCache.remove(uri) }
+            }
+        }
 
         suspend fun extractDurationFromFile(context: Context, uri: Uri): Long? {
             val key = uri.toString()

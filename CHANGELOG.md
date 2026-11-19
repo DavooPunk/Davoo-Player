@@ -4,7 +4,25 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.0 (Actual — Compilación 5)
+## v2.0.1 (Actual — Compilación 6)
+
+### Buscador Global en Cabecera Fija
+- **Botón fijo en todas las pestañas**: añadido el botón de búsqueda (lupa) en la esquina superior derecha de la cabecera de *Biblioteca*, *Álbumes* y *Playlists*.
+- **Búsqueda global unificada en tiempo real**: al pulsarlo se despliega un panel para filtrar simultáneamente canciones, álbumes, artistas y playlists, eliminando los buscadores duplicados del cuerpo y la barra flotante anterior.
+
+### Ecualizador Avanzado de 10 Bandas y Perfiles AutoEq
+- **Ecualizador gráfico de 10 bandas + Preamp**: ampliado a **31Hz, 62Hz, 125Hz, 250Hz, 500Hz, 1kHz, 2kHz, 4kHz, 8kHz y 16kHz** (-12 dB a +12 dB) con deslizador dedicado de **Preamp** y limitación suave en tiempo real sobre PCM bicuádrico para evitar clipping.
+- **Perfiles calibrados para audífonos (AutoEq)**: selector con buscador rápido para modelos populares (*Sony WH-1000XM4/XM5, Apple AirPods Pro 2, Samsung Galaxy Buds2 Pro, Sennheiser HD 600, Audio-Technica ATH-M50x, KZ ZSN Pro, JBL Tune 720BT, Bose QuietComfort Ultra, Harman IEM Neutro*) junto a presets clásicos (*Plano, Graves+, Vocal, Rock, Jazz, Clásica, Electrónica, V-Shape*).
+- **Perfiles personalizados del usuario**: guarda y elimina tus propios perfiles de ecualización y preamp con persistencia local.
+
+### Optimización de Rendimiento al Quitar Carpetas
+- **Actualización optimista instantánea**: al quitar una carpeta se refleja visualmente al instante con un indicador de carga sutil solo en ese elemento, sin bloquear el resto de la interfaz.
+- **Borrado por lotes y sin re-escaneo completo**: los registros asociados se eliminan por lotes en Room y se filtran en memoria directamente, evitando volver a escanear el resto de las carpetas vinculadas.
+- **Limpieza de memoria en segundo plano**: liberación asíncrona de caché de carátulas y duraciones en hilos secundarios.
+
+---
+
+## v2.0.0 (Compilación 5)
 
 ### Interfaz Limpia y Nuevo Menú de Opciones
 - **Hub principal limpio y unificado**: se eliminaron las opciones dispersas del encabezado y los menús/filtros de MP3, FLAC y WAV para mostrar toda tu música unificada en una interfaz minimalista y clara.

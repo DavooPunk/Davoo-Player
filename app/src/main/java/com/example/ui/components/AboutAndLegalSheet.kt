@@ -139,8 +139,18 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.0",
+        version = "v2.0.1",
         tag = "Actual",
+        items = listOf(
+            "Buscador global fijo en cabecera: botón de lupa siempre visible arriba a la derecha en Biblioteca, Álbumes y Playlists para filtrar canciones, álbumes, artistas y listas en tiempo real desde un único lugar.",
+            "Ecualizador avanzado de 10 bandas (31 Hz a 16 kHz) con Preamp dedicado (-12 a +12 dB) y limitador suave en tiempo real mediante procesamiento PCM bicuádrico.",
+            "Perfiles calibrados AutoEq para audífonos populares (Sony WH-1000XM4/XM5, AirPods Pro 2, Galaxy Buds2 Pro, Sennheiser HD 600, ATH-M50x, KZ ZSN Pro, JBL Tune, Bose QC Ultra) con buscador rápido y guardado de perfiles personalizados.",
+            "Optimización al quitar carpetas: eliminación instantánea en pantalla con indicador sutil, borrado por lotes en Room sin re-escanear el resto de carpetas y limpieza asíncrona de caché de carátulas."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.0",
+        tag = "Anterior",
         items = listOf(
             "Interfaz rediseñada y limpia: biblioteca unificada sin menús de MP3/FLAC y nuevo submenú de Opciones (icono de tuerca) para memoria, actualización, ecualizador, personalización y créditos.",
             "Traductor dual seleccionable: elige entre DeepL API v2 (con contexto musical) y Google Traductor (con limpieza de modismos), además de .lrc bilingües y traducciones humanas guardadas offline.",

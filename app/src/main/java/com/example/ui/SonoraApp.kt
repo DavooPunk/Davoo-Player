@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
@@ -16,6 +17,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -26,28 +31,44 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.LibraryMusic
-import androidx.compose.material.icons.outlined.QueueMusic
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,11 +78,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -80,6 +106,7 @@ import com.example.model.AudioTrackMetadata
 import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
 import com.example.model.SmartPlaylistType
+import com.example.ui.components.AudioAlbumArtThumbnail
 import com.example.ui.components.BatchAddToPlaylistBottomSheet
 import com.example.ui.components.CreateOrEditPlaylistDialog
 import com.example.ui.components.CreditsBottomSheet
@@ -88,10 +115,13 @@ import com.example.ui.components.FoldersExclusionSheet
 import com.example.ui.components.LyricsBottomSheet
 import com.example.ui.components.Media3FloatingBottomBar
 import com.example.ui.components.MiniPlayerBar
+import com.example.ui.components.PlaylistMosaicCover
 import com.example.ui.components.QueueBottomSheet
 import com.example.ui.components.SleepTimerSheet
 import com.example.ui.components.TagEditorBottomSheet
 import com.example.ui.components.TrackMetadataBottomSheet
+import com.example.ui.components.TrackRow
+import com.example.ui.components.formatDuration
 import com.example.ui.screens.AlbumDetailScreen
 import com.example.ui.screens.AlbumsScreen
 import com.example.ui.screens.LibraryScreen
@@ -103,6 +133,7 @@ import com.example.ui.screens.SmartPlaylistDetailScreen
 import com.example.ui.theme.ArtworkColorExtractor
 import com.example.ui.theme.CopperAmber
 import com.example.ui.theme.LosslessCyan
+import com.example.ui.viewmodel.SonoraUiState
 import com.example.ui.viewmodel.SonoraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -161,8 +192,8 @@ private val topDestinations = listOf(
     TopDestination(
         route = Route.Playlists,
         labelRes = R.string.nav_playlists,
-        selectedIcon = Icons.Rounded.QueueMusic,
-        unselectedIcon = Icons.Outlined.QueueMusic,
+        selectedIcon = Icons.AutoMirrored.Rounded.QueueMusic,
+        unselectedIcon = Icons.AutoMirrored.Outlined.QueueMusic,
         testTag = "nav_playlists"
     )
 )
@@ -177,10 +208,12 @@ fun SonoraApp(
     val activePlayer by viewModel.mediaPlayer.collectAsStateWithLifecycle()
     val audioSettings by viewModel.audioSettings.collectAsStateWithLifecycle()
     val eqBands by viewModel.eqBands.collectAsStateWithLifecycle()
+    val customEqProfiles by viewModel.customEqProfiles.collectAsStateWithLifecycle()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
     val stopAfterCurrentTrack by viewModel.stopAfterCurrentTrack.collectAsStateWithLifecycle()
     val lyricsTranslationState by viewModel.lyricsTranslationState.collectAsStateWithLifecycle()
     val preferredTranslationEngine by viewModel.preferredTranslationEngine.collectAsStateWithLifecycle()
+    var requestedArtistDrilldown by remember { mutableStateOf<String?>(null) }
 
     val navController = rememberNavController()
     val safePopBackStack: () -> Unit = {
@@ -483,6 +516,13 @@ fun SonoraApp(
     val currentDestination = navBackStackEntry?.destination
     val isNowPlaying = currentDestination?.hasRoute<Route.NowPlaying>() == true
     val isSettings = currentDestination?.hasRoute<Route.Settings>() == true
+    val isMainTab = currentDestination?.hasRoute<Route.Library>() == true ||
+        currentDestination?.hasRoute<Route.Albums>() == true ||
+        currentDestination?.hasRoute<Route.Playlists>() == true
+
+    BackHandler(enabled = uiState.isGlobalSearchOpen && isMainTab) {
+        viewModel.closeGlobalSearch()
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isWideScreen = maxWidth >= 600.dp
@@ -507,6 +547,7 @@ fun SonoraApp(
                         NavigationRailItem(
                             selected = selected,
                             onClick = {
+                                viewModel.closeGlobalSearch()
                                 navController.navigate(dest.route) {
                                     popUpTo(navController.graph.findStartDestination().id) {
                                         saveState = true
@@ -593,6 +634,7 @@ fun SonoraApp(
                                         NavigationBarItem(
                                             selected = selected,
                                             onClick = {
+                                                viewModel.closeGlobalSearch()
                                                 navController.navigate(dest.route) {
                                                     popUpTo(navController.graph.findStartDestination().id) {
                                                         saveState = true
@@ -648,10 +690,12 @@ fun SonoraApp(
                                 onRequestPermission = launchPermissionRequest,
                                 onImportFiles = launchSafImport,
                                 onOpenSettings = {
+                                    viewModel.closeGlobalSearch()
                                     navController.navigate(Route.Settings) {
                                         launchSingleTop = true
                                     }
                                 },
+                                onOpenGlobalSearch = viewModel::openGlobalSearch,
                                 onSearchChange = viewModel::updateSearchQuery,
                                 onSelectSortOrder = viewModel::selectSortOrder,
                                 onPlayTrack = { tracks, index ->
@@ -733,6 +777,9 @@ fun SonoraApp(
                                 },
                                 onShowMetadata = { track -> metadataTargetTrack = track },
                                 onToggleFolderExclude = viewModel::toggleFolderExclusion,
+                                onOpenGlobalSearch = viewModel::openGlobalSearch,
+                                requestedArtistName = requestedArtistDrilldown,
+                                onConsumeRequestedArtist = { requestedArtistDrilldown = null },
                                 bottomContentPadding = bottomContentPadding
                             )
                         }
@@ -783,6 +830,7 @@ fun SonoraApp(
                                         arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "*/*")
                                     )
                                 },
+                                onOpenGlobalSearch = viewModel::openGlobalSearch,
                                 onSmartPlaylistClick = { smartType ->
                                     navController.navigate(Route.SmartPlaylistDetail(smartType.name))
                                 },
@@ -903,6 +951,57 @@ fun SonoraApp(
                             )
                         }
                     }
+
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = uiState.isGlobalSearchOpen && isMainTab,
+                        enter = fadeIn() + slideInVertically { -it / 6 },
+                        exit = fadeOut() + slideOutVertically { -it / 6 },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .let { if (!isNowPlaying) it.widthIn(max = 960.dp) else it }
+                    ) {
+                        GlobalSearchOverlay(
+                            uiState = uiState,
+                            currentTrackId = playbackState.currentTrack?.id,
+                            isPlaying = playbackState.isPlaying,
+                            bottomContentPadding = bottomContentPadding,
+                            onQueryChange = viewModel::updateSearchQuery,
+                            onClose = viewModel::closeGlobalSearch,
+                            onPlayTrack = { tracks, index ->
+                                ensureNotificationPermissionForPlayback()
+                                viewModel.playTracks(tracks, index, shuffle = false)
+                            },
+                            onPlayNext = viewModel::playNext,
+                            onAddToQueue = viewModel::enqueueTrack,
+                            onAddToPlaylist = { track -> tracksToAddToPlaylist = listOf(track) },
+                            onToggleFavorite = viewModel::toggleFavorite,
+                            onShowLyrics = { track -> lyricsTargetTrack = track },
+                            onEditTags = { track ->
+                                pickedCustomCoverUri = null
+                                tagEditorTargetTrack = track
+                            },
+                            onShowMetadata = { track -> metadataTargetTrack = track },
+                            onOpenAlbum = { albumName ->
+                                viewModel.closeGlobalSearch()
+                                navController.navigate(Route.AlbumDetail(albumName))
+                            },
+                            onOpenArtist = { artistName ->
+                                viewModel.closeGlobalSearch()
+                                requestedArtistDrilldown = artistName
+                                navController.navigate(Route.Albums) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            onOpenPlaylist = { playlistId ->
+                                viewModel.closeGlobalSearch()
+                                navController.navigate(Route.PlaylistDetail(playlistId))
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -974,6 +1073,9 @@ fun SonoraApp(
             onUpdateSettingsThrottled = { updated, immediate ->
                 viewModel.updateAudioSettings(updated, immediate = immediate)
             },
+            customProfiles = customEqProfiles,
+            onSaveCustomProfile = viewModel::saveCustomEqProfile,
+            onDeleteCustomProfile = viewModel::deleteCustomEqProfile,
             onDismiss = { showEqualizerSheet = false }
         )
     }
@@ -997,6 +1099,7 @@ fun SonoraApp(
             onToggleExclude = viewModel::toggleFolderExclusion,
             onDismiss = { showFoldersSheet = false },
             sdCardFolders = uiState.sdCardFolders,
+            removingSdFolders = uiState.removingSdFolderUris,
             onAddSdCardFolder = { openSdFolderLauncher.launch(null) },
             onRemoveSdCardFolder = viewModel::removeSdCardFolder
         )
@@ -1108,5 +1211,376 @@ fun SonoraApp(
                 pickedCustomCoverUri = null
             }
         )
+    }
+}
+
+@Composable
+fun GlobalSearchOverlay(
+    uiState: SonoraUiState,
+    currentTrackId: String?,
+    isPlaying: Boolean,
+    bottomContentPadding: PaddingValues,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+    onPlayTrack: (List<AudioTrack>, Int) -> Unit,
+    onPlayNext: (AudioTrack) -> Unit,
+    onAddToQueue: (AudioTrack) -> Unit,
+    onAddToPlaylist: (AudioTrack) -> Unit,
+    onToggleFavorite: (AudioTrack) -> Unit,
+    onShowLyrics: (AudioTrack) -> Unit,
+    onEditTags: (AudioTrack) -> Unit,
+    onShowMetadata: (AudioTrack) -> Unit,
+    onOpenAlbum: (String) -> Unit,
+    onOpenArtist: (String) -> Unit,
+    onOpenPlaylist: (Long) -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.background,
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("global_search_container")
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = uiState.searchQuery,
+                    onValueChange = onQueryChange,
+                    placeholder = {
+                        Text(
+                            text = "Buscar canciones, álbumes, artistas o listas…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Rounded.Search, contentDescription = null, tint = CopperAmber)
+                    },
+                    trailingIcon = {
+                        if (uiState.searchQuery.isNotEmpty()) {
+                            IconButton(
+                                onClick = { onQueryChange("") },
+                                modifier = Modifier.testTag("global_search_clear_button")
+                            ) {
+                                Icon(Icons.Rounded.Clear, contentDescription = "Limpiar búsqueda")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester)
+                        .testTag("global_search_input")
+                )
+
+                Surface(
+                    onClick = onClose,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("global_search_close_button")
+                ) {
+                    Box(
+                        modifier = Modifier.size(44.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Cerrar búsqueda global"
+                        )
+                    }
+                }
+            }
+
+            val trimmed = uiState.searchQuery.trim()
+            val hasResults = uiState.globalMatchingTracks.isNotEmpty() ||
+                uiState.globalMatchingAlbums.isNotEmpty() ||
+                uiState.globalMatchingArtists.isNotEmpty() ||
+                uiState.globalMatchingPlaylists.isNotEmpty()
+
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .testTag("global_search_results_list"),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 4.dp,
+                    bottom = bottomContentPadding.calculateBottomPadding() + 24.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (trimmed.isEmpty()) {
+                    item(key = "global_search_hint") {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Búsqueda global en tiempo real",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Escribe para filtrar al instante entre ${uiState.allTracks.size} canciones, ${uiState.albums.size} álbumes, ${uiState.artists.size} artistas y ${uiState.playlists.size} listas.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else if (!hasResults) {
+                    item(key = "global_search_empty") {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("global_search_empty_state")
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Sin resultados para «$trimmed»",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = "Prueba con otro título, artista, álbum o nombre de lista.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    if (uiState.globalMatchingAlbums.isNotEmpty()) {
+                        item(key = "section_albums") {
+                            Text(
+                                text = "Álbumes (${uiState.globalMatchingAlbums.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = CopperAmber,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        items(
+                            items = uiState.globalMatchingAlbums.take(12),
+                            key = { "album_${it.albumName}" }
+                        ) { album ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onOpenAlbum(album.albumName) }
+                                    .testTag("global_search_album_${album.albumName}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AudioAlbumArtThumbnail(
+                                        audioUri = album.tracks.firstOrNull()?.contentUri.orEmpty(),
+                                        albumArtUri = album.albumArtUri,
+                                        contentDescription = album.albumName,
+                                        cornerRadius = 10.dp,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = album.albumName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${album.artist.ifBlank { "Álbum" }} · ${album.tracks.size} pistas",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (uiState.globalMatchingArtists.isNotEmpty()) {
+                        item(key = "section_artists") {
+                            Text(
+                                text = "Artistas (${uiState.globalMatchingArtists.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = LosslessCyan,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        items(
+                            items = uiState.globalMatchingArtists.take(10),
+                            key = { "artist_${it.artistName}" }
+                        ) { artist ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onOpenArtist(artist.artistName) }
+                                    .testTag("global_search_artist_${artist.artistName}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = LosslessCyan.copy(alpha = 0.16f),
+                                        modifier = Modifier.size(44.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                Icons.Rounded.Person,
+                                                contentDescription = null,
+                                                tint = LosslessCyan
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = artist.artistName,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${artist.albumCount} álbumes · ${artist.tracks.size} canciones",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (uiState.globalMatchingPlaylists.isNotEmpty()) {
+                        item(key = "section_playlists") {
+                            Text(
+                                text = "Listas (${uiState.globalMatchingPlaylists.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = CopperAmber,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        items(
+                            items = uiState.globalMatchingPlaylists.take(10),
+                            key = { "playlist_${it.id}" }
+                        ) { playlist ->
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onOpenPlaylist(playlist.id) }
+                                    .testTag("global_search_playlist_${playlist.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    PlaylistMosaicCover(
+                                        artworkUris = playlist.artworkUris,
+                                        contentDescription = playlist.name,
+                                        cornerRadius = 10.dp,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = playlist.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${playlist.trackCount} canciones · ${formatDuration(playlist.totalDurationMs)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (uiState.globalMatchingTracks.isNotEmpty()) {
+                        item(key = "section_tracks") {
+                            Text(
+                                text = "Canciones (${uiState.globalMatchingTracks.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        items(
+                            items = uiState.globalMatchingTracks,
+                            key = { "track_${it.id}" }
+                        ) { track ->
+                            val idx = uiState.globalMatchingTracks.indexOf(track)
+                            val isCurrent = currentTrackId == track.id
+                            TrackRow(
+                                track = track,
+                                isCurrentTrack = isCurrent,
+                                isPlaying = isCurrent && isPlaying,
+                                onClick = {
+                                    if (idx >= 0) {
+                                        onPlayTrack(uiState.globalMatchingTracks, idx)
+                                    }
+                                },
+                                onPlayNext = { onPlayNext(track) },
+                                onAddToQueue = { onAddToQueue(track) },
+                                onAddToPlaylist = { onAddToPlaylist(track) },
+                                onShowMetadata = { onShowMetadata(track) },
+                                onToggleFavorite = { onToggleFavorite(track) },
+                                onShowLyrics = { onShowLyrics(track) },
+                                onEditTags = { onEditTags(track) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -61,6 +61,7 @@ class PlaybackService : MediaLibraryService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var prefsStore: PlaybackPreferencesStore
     private val effectsController = AudioEffectsController()
+    private val tenBandEqProcessor = TenBandEqualizerAudioProcessor()
     private val stereoBalanceProcessor = StereoBalanceAudioProcessor()
 
     @Volatile
@@ -69,6 +70,8 @@ class PlaybackService : MediaLibraryService() {
     private var currentSettings: AudioSettings = AudioSettings()
     private var currentReplayGainMultiplier: Float = 1.0f
     private var crossfadeJob: Job? = null
+    private var gapPauseJob: Job? = null
+    private var isInTrackGapPause: Boolean = false
     private var persistSessionJob: Job? = null
     private var lastPersistedAtMs: Long = 0L
 
@@ -91,7 +94,7 @@ class PlaybackService : MediaLibraryService() {
                 enableAudioTrackPlaybackParams: Boolean
             ): AudioSink {
                 return DefaultAudioSink.Builder(context)
-                    .setAudioProcessors(arrayOf(stereoBalanceProcessor))
+                    .setAudioProcessors(arrayOf(tenBandEqProcessor, stereoBalanceProcessor))
                     .setEnableFloatOutput(enableFloatOutput)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .build()
@@ -112,6 +115,8 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                gapPauseJob?.cancel()
+                isInTrackGapPause = false
                 sessionPersistedOnStop = false
                 refreshReplayGainAndVolume(player, mediaItem)
                 persistCurrentSession(player)
@@ -119,6 +124,15 @@ class PlaybackService : MediaLibraryService() {
                 if (currentSettings.crossfadeSeconds > 0 && player.isPlaying) {
                     serviceScope.launch { fadeInPlayer(player) }
                     startCrossfadeMonitor(player)
+                } else if (shouldInsertTrackGap(reason, mediaItem, player)) {
+                    scheduleTrackGapPause(player, mediaItem!!.mediaId)
+                }
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (isInTrackGapPause && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                    gapPauseJob?.cancel()
+                    isInTrackGapPause = false
                 }
             }
 
@@ -133,7 +147,9 @@ class PlaybackService : MediaLibraryService() {
                     crossfadeJob?.cancel()
                     persistCurrentSession(player)
                 }
-                updateHomeWidgets(player)
+                if (isPlaying || !isInTrackGapPause) {
+                    updateHomeWidgets(player)
+                }
             }
 
             override fun onPositionDiscontinuity(
@@ -270,6 +286,9 @@ class PlaybackService : MediaLibraryService() {
     private fun shutdownFromTaskRemoval() {
         crossfadeJob?.cancel()
         crossfadeJob = null
+        gapPauseJob?.cancel()
+        gapPauseJob = null
+        isInTrackGapPause = false
         persistSessionJob?.cancel()
         persistSessionJob = null
 
@@ -316,6 +335,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         isServiceDestroyed = true
         crossfadeJob?.cancel()
+        gapPauseJob?.cancel()
+        isInTrackGapPause = false
         persistSessionJob?.cancel()
         mediaLibrarySession?.run {
             if (!sessionPersistedOnStop) {
@@ -339,7 +360,11 @@ class PlaybackService : MediaLibraryService() {
         val previous = currentSettings
         val safeSpeed = settings.playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.5f, 2.0f) ?: 1.0f
         val safeBalance = settings.stereoBalance.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
+        val safePreamp = settings.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f
+        val normalizedGains = com.example.model.EqPreset.normalizeToTenBands(settings.bandGainsMb)
         val normalized = settings.copy(
+            bandGainsMb = normalizedGains,
+            preampDb = safePreamp,
             playbackSpeed = safeSpeed,
             stereoBalance = safeBalance,
             bassBoostStrength = settings.bassBoostStrength.coerceIn(0, 1000),
@@ -348,6 +373,17 @@ class PlaybackService : MediaLibraryService() {
         )
         currentSettings = normalized
 
+        if (forceAll ||
+            previous.eqEnabled != normalized.eqEnabled ||
+            previous.preampDb != safePreamp ||
+            previous.bandGainsMb != normalizedGains
+        ) {
+            tenBandEqProcessor.updateSettings(
+                eqEnabled = normalized.eqEnabled,
+                preampDb = safePreamp,
+                bandGainsMb = normalizedGains
+            )
+        }
         if (forceAll || previous.stereoBalance != safeBalance) {
             stereoBalanceProcessor.setBalance(safeBalance)
         }
@@ -355,8 +391,6 @@ class PlaybackService : MediaLibraryService() {
             runCatching { player.setPlaybackParameters(PlaybackParameters(safeSpeed)) }
         }
         val dspChanged = forceAll ||
-            previous.eqEnabled != normalized.eqEnabled ||
-            previous.bandGainsMb != normalized.bandGainsMb ||
             previous.bassBoostStrength != normalized.bassBoostStrength ||
             previous.virtualizerStrength != normalized.virtualizerStrength ||
             previous.replayGainEnabled != normalized.replayGainEnabled
@@ -376,6 +410,49 @@ class PlaybackService : MediaLibraryService() {
         }
         if (forceAll || previous.replayGainEnabled != normalized.replayGainEnabled) {
             refreshReplayGainAndVolume(player, player.currentMediaItem)
+        }
+        if ((normalized.gaplessEnabled || normalized.crossfadeSeconds > 0) && isInTrackGapPause) {
+            gapPauseJob?.cancel()
+            isInTrackGapPause = false
+            if (!isServiceDestroyed && player.mediaItemCount > 0 && !player.playWhenReady) {
+                runCatching { player.play() }
+            }
+        }
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun shouldInsertTrackGap(
+        reason: Int,
+        mediaItem: MediaItem?,
+        player: Player
+    ): Boolean {
+        return !currentSettings.gaplessEnabled &&
+            currentSettings.crossfadeSeconds <= 0 &&
+            reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO &&
+            mediaItem != null &&
+            player.playWhenReady
+    }
+
+    @androidx.annotation.VisibleForTesting
+    internal fun updateSettingsForTest(settings: AudioSettings) {
+        mediaLibrarySession?.player?.let { player ->
+            applyAudioSettingsToPlayer(player, settings, forceAll = true)
+        }
+    }
+
+    private fun scheduleTrackGapPause(player: Player, targetMediaId: String) {
+        gapPauseJob?.cancel()
+        isInTrackGapPause = true
+        runCatching { player.pause() }
+        gapPauseJob = serviceScope.launch {
+            delay(TRACK_GAP_PAUSE_MS)
+            isInTrackGapPause = false
+            if (!isServiceDestroyed &&
+                player.currentMediaItem?.mediaId == targetMediaId &&
+                !player.playWhenReady
+            ) {
+                runCatching { player.play() }
+            }
         }
     }
 
@@ -844,12 +921,16 @@ class PlaybackService : MediaLibraryService() {
         val presetName = args.getString(ARG_EQ_PRESET)
         val preset = com.example.model.EqPreset.entries.firstOrNull { it.name == presetName }
             ?: com.example.model.EqPreset.FLAT
-        val gains = args.getIntArray(ARG_BAND_GAINS_MB)?.toList()?.takeIf { it.isNotEmpty() }
-            ?: listOf(0, 0, 0, 0, 0)
+        val gains = com.example.model.EqPreset.normalizeToTenBands(
+            args.getIntArray(ARG_BAND_GAINS_MB)?.toList().orEmpty()
+        )
         return AudioSettings(
             eqEnabled = args.getBoolean(ARG_EQ_ENABLED, false),
             eqPreset = preset,
             bandGainsMb = gains,
+            preampDb = args.getFloat(ARG_PREAMP_DB, 0f),
+            activeProfileId = args.getString(ARG_PROFILE_ID),
+            activeProfileName = args.getString(ARG_PROFILE_NAME),
             bassBoostStrength = args.getInt(ARG_BASS_BOOST, 0),
             virtualizerStrength = args.getInt(ARG_VIRTUALIZER, 0),
             crossfadeSeconds = args.getInt(ARG_CROSSFADE, 0),
@@ -870,6 +951,9 @@ class PlaybackService : MediaLibraryService() {
         const val ARG_EQ_ENABLED = "arg_eq_enabled"
         const val ARG_EQ_PRESET = "arg_eq_preset"
         const val ARG_BAND_GAINS_MB = "arg_band_gains_mb"
+        const val ARG_PREAMP_DB = "arg_preamp_db"
+        const val ARG_PROFILE_ID = "arg_profile_id"
+        const val ARG_PROFILE_NAME = "arg_profile_name"
         const val ARG_BASS_BOOST = "arg_bass_boost"
         const val ARG_VIRTUALIZER = "arg_virtualizer"
         const val ARG_CROSSFADE = "arg_crossfade"
@@ -884,6 +968,7 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_WIDGET_PREV = "com.example.widget.ACTION_PREV"
 
         private const val SEEK_INCREMENT_MS = 10_000L
+        private const val TRACK_GAP_PAUSE_MS = 450L
         private const val MAX_PERSISTED_ITEMS = 120
         private const val WIDGET_IDLE_NOTIFICATION_ID = 9002
         private const val ROOT_ID = "sonora_root"

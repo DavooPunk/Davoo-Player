@@ -29,10 +29,13 @@ import coil.request.ImageRequest
 import coil.request.Options
 import coil.size.pxOrElse
 import com.example.R
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -237,14 +240,33 @@ object AudioArtImageLoaderProvider {
         }
     }
 
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     fun trimMemory(level: Int) {
         val cache = instance?.memoryCache ?: return
-        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
-            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
-        ) {
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
             cache.clear()
         } else {
             cache.trimMemory(level)
+        }
+    }
+
+    /**
+     * Evicts cached thumbnails for removed audio URIs asynchronously on a background thread
+     * so deleting large folders never stalls the UI thread.
+     */
+    fun evictUrisAsync(uris: Collection<String>) {
+        if (uris.isEmpty()) return
+        val cache = instance?.memoryCache ?: return
+        val uriSet = uris.toHashSet()
+        cleanupScope.launch {
+            val keysToRemove = cache.keys.filter { key ->
+                val raw = key.key
+                if (!raw.startsWith("audio_art:")) return@filter false
+                // Key format: "audio_art:<audioUri>:<w>:<h>"
+                uriSet.any { uri -> raw.startsWith("audio_art:$uri:") }
+            }
+            keysToRemove.forEach { key -> cache.remove(key) }
         }
     }
 }

@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
     override fun onLowMemory() {
         super.onLowMemory()
         com.example.ui.components.AudioArtImageLoaderProvider.trimMemory(
-            android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+            android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
         )
     }
 }

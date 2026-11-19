@@ -195,6 +195,8 @@ class PlaybackController(
 
     fun updateAudioSettings(newSettings: AudioSettings, immediate: Boolean = true) {
         val sanitized = newSettings.copy(
+            bandGainsMb = EqPreset.normalizeToTenBands(newSettings.bandGainsMb),
+            preampDb = newSettings.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f,
             bassBoostStrength = newSettings.bassBoostStrength.coerceIn(0, 1000),
             virtualizerStrength = newSettings.virtualizerStrength.coerceIn(0, 1000),
             crossfadeSeconds = newSettings.crossfadeSeconds.coerceIn(0, 12),
@@ -457,6 +459,9 @@ class PlaybackController(
                 putBoolean(PlaybackService.ARG_EQ_ENABLED, settings.eqEnabled)
                 putString(PlaybackService.ARG_EQ_PRESET, settings.eqPreset.name)
                 putIntArray(PlaybackService.ARG_BAND_GAINS_MB, settings.bandGainsMb.toIntArray())
+                putFloat(PlaybackService.ARG_PREAMP_DB, settings.preampDb)
+                settings.activeProfileId?.let { putString(PlaybackService.ARG_PROFILE_ID, it) }
+                settings.activeProfileName?.let { putString(PlaybackService.ARG_PROFILE_NAME, it) }
                 putInt(PlaybackService.ARG_BASS_BOOST, settings.bassBoostStrength)
                 putInt(PlaybackService.ARG_VIRTUALIZER, settings.virtualizerStrength)
                 putInt(PlaybackService.ARG_CROSSFADE, settings.crossfadeSeconds)
