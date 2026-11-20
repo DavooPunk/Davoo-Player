@@ -4,7 +4,26 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.1 (Actual — Compilación 6)
+## v2.0.2 (Actual — Compilación 7)
+
+### Hub Principal y Ecualizador
+- **Cabecera principal mejorada**: intercambio de los botones circulares superiores en *Tu Música* para ubicar la lupa de búsqueda a la izquierda y la tuerca de *Opciones* en el extremo derecho.
+- **Nuevo preset Hip-Hop**: curva de 10 bandas orientada a subgraves y punch (`31 Hz`, `62 Hz`, `125 Hz`) con brillo definido en agudos y Preamp automático (`-4.8 dB`) para evitar clipping.
+
+### Visor de Letras Minimalista (Estilo Spotify)
+- **Cabecera sin distracciones**: al cargar una letra se ocultan automáticamente los botones superiores y las filas grandes del traductor, dejando las letras sincronizadas como protagonistas en alto contraste blanco sobre fondo oscuro y scroll fluido.
+- **Barra inferior con dos iconos**: abajo a la izquierda un botón compacto de traducción (*DeepL / Google*, idioma y modos *Bilingüe / Traducida / Original*) en menú flotante; abajo a la derecha un botón compacto de gestión para descargar desde LRCLIB, cargar `.lrc` local, abrir Lyricsify o eliminar la letra guardada, junto a una barra de progreso de reproducción integrada debajo.
+
+### Actualizaciones Opcionales vía GitHub y Limpieza de Ajustes
+- **Comprobador opcional de actualizaciones**: nueva opción discreta en *Opciones* (manual o diaria ligera si se activa) que consulta las versiones en tu repositorio de GitHub, muestra aviso en la app, envía notificación del sistema opcional y abre el enlace directamente en el navegador externo.
+- **Limpieza en Opciones**: se eliminó el botón redundante de *"Código abierto (Licencia MIT) y legal"*, conservando *"Acerca de Davoo Player"* como acceso unificado.
+
+### Estabilidad y Bajo Consumo
+- **Menor consumo de CPU, RAM y batería**: visualizador de espectro optimizado por GPU (`graphicsLayer.scaleY`) sin relayouts a 60 fps, limpieza de caché de colores de carátula en `onTrimMemory`/`onLowMemory`, bypass rápido de matriz en el procesador de audio del ecualizador y liberación de recursos al cerrar pantallas y ViewModel.
+
+---
+
+## v2.0.1 (Compilación 6)
 
 ### Buscador Global en Cabecera Fija
 - **Botón fijo en todas las pestañas**: añadido el botón de búsqueda (lupa) en la esquina superior derecha de la cabecera de *Biblioteca*, *Álbumes* y *Playlists*.

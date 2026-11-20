@@ -53,6 +53,9 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,8 +71,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -213,6 +218,7 @@ fun SonoraApp(
     val stopAfterCurrentTrack by viewModel.stopAfterCurrentTrack.collectAsStateWithLifecycle()
     val lyricsTranslationState by viewModel.lyricsTranslationState.collectAsStateWithLifecycle()
     val preferredTranslationEngine by viewModel.preferredTranslationEngine.collectAsStateWithLifecycle()
+    val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     var requestedArtistDrilldown by remember { mutableStateOf<String?>(null) }
 
     val navController = rememberNavController()
@@ -743,7 +749,19 @@ fun SonoraApp(
                                 onUpdateAudioSettings = { viewModel.updateAudioSettings(it, immediate = true) },
                                 onSelectTranslationEngine = viewModel::setPreferredTranslationEngine,
                                 onOpenAboutAndLegal = { showCreditsSheet = true },
-                                bottomContentPadding = bottomContentPadding
+                                bottomContentPadding = bottomContentPadding,
+                                autoCheckUpdatesEnabled = updateUiState.autoCheckEnabled,
+                                isCheckingUpdates = updateUiState.isChecking,
+                                updateStatusSubtitle = updateUiState.lastStatusMessage,
+                                githubRepoConfigured = updateUiState.githubRepoUrl.isNotBlank(),
+                                onCheckUpdatesNow = { viewModel.checkForUpdates(manual = true) },
+                                onToggleAutoCheckUpdates = { enabled ->
+                                    if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !viewModel.hasNotificationPermission()) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    viewModel.setAutoUpdateCheckEnabled(enabled)
+                                },
+                                onConfigureGithubRepo = viewModel::requestConfigureGithubRepo
                             )
                         }
 
@@ -1114,20 +1132,29 @@ fun SonoraApp(
 
     // Synced & Embedded Lyrics sheet
     lyricsTargetTrack?.let { target ->
+        DisposableEffect(target.id) {
+            onDispose {
+                viewModel.resetLyricsTranslation()
+            }
+        }
+        val isCurrentTrack = playbackState.currentTrack?.id == target.id
         LyricsBottomSheet(
             track = target,
             lyrics = loadedLyrics,
             isLoading = isLoadingLyrics,
-            positionMs = if (playbackState.currentTrack?.id == target.id) playbackState.positionMs else 0L,
+            positionMs = if (isCurrentTrack) playbackState.positionMs else 0L,
             onSeekTo = { targetMs ->
-                if (playbackState.currentTrack?.id == target.id) {
+                if (isCurrentTrack) {
                     viewModel.seekTo(targetMs)
                 }
             },
             onPickLrcFile = {
                 pickLrcFileLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
             },
-            onDismiss = { lyricsTargetTrack = null },
+            onDismiss = {
+                lyricsTargetTrack = null
+                viewModel.resetLyricsTranslation()
+            },
             onClearSavedLyrics = {
                 coroutineScope.launch {
                     isLoadingLyrics = true
@@ -1178,7 +1205,16 @@ fun SonoraApp(
                         snackbarHostState.showSnackbar("No se encontró un navegador para abrir $siteName")
                     }
                 }
-            }
+            },
+            durationMs = if (isCurrentTrack && playbackState.durationMs > 0L) {
+                playbackState.durationMs
+            } else {
+                target.durationMs
+            },
+            isPlaying = isCurrentTrack && playbackState.isPlaying,
+            onTogglePlayPause = if (isCurrentTrack) {
+                viewModel::togglePlayPause
+            } else null
         )
     }
 
@@ -1210,6 +1246,110 @@ fun SonoraApp(
                 tagEditorTargetTrack = null
                 pickedCustomCoverUri = null
             }
+        )
+    }
+
+    // Optional GitHub Repository Configuration Dialog for update checks
+    if (updateUiState.promptConfigureRepo) {
+        var repoDraft by remember(updateUiState.githubRepoUrl) {
+            mutableStateOf(updateUiState.githubRepoUrl)
+        }
+        AlertDialog(
+            onDismissRequest = viewModel::dismissConfigureGithubRepo,
+            icon = {
+                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = LosslessCyan)
+            },
+            title = { Text("Repositorio de GitHub") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Pega el enlace de tu repositorio en GitHub para comprobar nuevas versiones de Davoo Player:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = repoDraft,
+                        onValueChange = { repoDraft = it },
+                        label = { Text("Enlace de GitHub") },
+                        placeholder = { Text("https://github.com/DavooPunk/Davoo-Player") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("github_repo_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.saveGithubRepoAndCheck(repoDraft, checkNow = true) },
+                    enabled = repoDraft.isNotBlank(),
+                    modifier = Modifier.testTag("save_github_repo_button")
+                ) {
+                    Text("Guardar y comprobar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissConfigureGithubRepo) {
+                    Text("Cancelar")
+                }
+            },
+            modifier = Modifier.testTag("github_repo_dialog")
+        )
+    }
+
+    // In-app Update Available Notice (opens GitHub directly in external browser)
+    updateUiState.availableUpdate?.let { updateInfo ->
+        AlertDialog(
+            onDismissRequest = viewModel::dismissAvailableUpdate,
+            icon = {
+                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = CopperAmber)
+            },
+            title = { Text("Nueva versión disponible: v${updateInfo.latestVersion}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Se ha publicado Davoo Player v${updateInfo.latestVersion} en GitHub. Pulsa Actualizar para abrir la descarga en tu navegador.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (updateInfo.releaseNotes.isNotBlank()) {
+                        Text(
+                            text = updateInfo.releaseNotes,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissAvailableUpdate()
+                        val opened = runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(updateInfo.releaseUrl)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                        }.isSuccess
+                        if (!opened) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("No se encontró navegador para abrir GitHub")
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("open_github_update_button")
+                ) {
+                    Text("Actualizar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissAvailableUpdate) {
+                    Text("Más tarde")
+                }
+            },
+            modifier = Modifier.testTag("app_update_available_dialog")
         )
     }
 }

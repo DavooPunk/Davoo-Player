@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -915,6 +916,9 @@ class ExampleRobolectricTest {
 
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
+        // Under Spotify-style minimal view, file/download management lives inside bottom-right menu
+        composeTestRule.onNodeWithTag("lyrics_manage_menu_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("clear_saved_lrc_button").assertIsDisplayed().performClick()
         assertTrue(cleared)
     }
@@ -1751,10 +1755,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.1").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.2").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.1").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.0").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v1.0.0").performScrollTo().assertIsDisplayed()
     }
@@ -2061,18 +2066,28 @@ class ExampleRobolectricTest {
         Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
         composeTestRule.waitForIdle()
 
-        // Native bilingual LRC exposes modes & offline badge immediately without network
+        // Spotify minimal view hides large top header buttons and renders lyrics directly with bottom corner menus
+        composeTestRule.onNodeWithText("Corremos en la noche").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_playback_progress_bar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("download_online_lyrics_button").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("lyrics_manage_menu_button").assertIsDisplayed()
+
+        // Open compact floating translate menu from bottom-left icon
+        composeTestRule.onNodeWithTag("lyrics_translate_menu_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("lyrics_display_mode_row").assertIsDisplayed()
         composeTestRule.onNodeWithTag("translation_offline_badge").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Corremos en la noche").assertIsDisplayed()
 
-        // Switch from DeepL to Google right inside Lyrics sheet and trigger translation
+        // Switch from DeepL to Google inside floating menu and trigger translation
         composeTestRule.onNodeWithTag("lyrics_engine_google").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("translate_lyrics_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
         assertEquals(com.example.ai.TranslationEngine.GOOGLE, triggeredEngine)
 
-        // Open manual offline editor, test Letras.com + LyricsTranslate links, and save offline
+        // Re-open translate menu and open manual offline editor
+        composeTestRule.onNodeWithTag("lyrics_translate_menu_button").performClick()
+        composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("edit_translation_button").assertIsDisplayed().performClick()
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("manual_translation_editor_panel").assertIsDisplayed()
@@ -2477,5 +2492,185 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("removing_sd_folder_indicator_${folderA.treeUri}").assertIsDisplayed()
         composeTestRule.onNodeWithText("Quitando «Tarjeta SD A» en segundo plano…").assertIsDisplayed()
         composeTestRule.onNodeWithText("Tarjeta SD B").assertIsDisplayed()
+    }
+
+    @Test
+    fun `loadTranslationEngine defaults to Google without DEEPL_API_KEY and DeepL when configured`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+
+        assertEquals(
+            com.example.ai.TranslationEngine.GOOGLE,
+            prefs.loadTranslationEngine(apiKey = "DEEPL_API_KEY_DEFAULT_VALUE")
+        )
+        assertEquals(
+            com.example.ai.TranslationEngine.DEEPL,
+            prefs.loadTranslationEngine(apiKey = "sample-key:fx")
+        )
+
+        prefs.saveTranslationEngine(com.example.ai.TranslationEngine.DEEPL)
+        assertEquals(
+            com.example.ai.TranslationEngine.DEEPL,
+            prefs.loadTranslationEngine(apiKey = "DEEPL_API_KEY_DEFAULT_VALUE")
+        )
+    }
+
+    @Test
+    fun `libraryScreen places search button to the left of settings gear button on top-right header`() {
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.LibraryScreen(
+                    uiState = com.example.ui.viewmodel.SonoraUiState(hasAudioPermission = true),
+                    playbackState = com.example.playback.PlaybackUiState(),
+                    onRequestPermission = {},
+                    onImportFiles = {},
+                    onSelectSortOrder = {},
+                    onPlayTrack = { _, _ -> },
+                    onShuffleAll = {},
+                    onPlayNext = {},
+                    onAddToQueue = {},
+                    onAddToPlaylist = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        val searchBounds = composeTestRule.onNodeWithTag("header_search_button")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+        val settingsBounds = composeTestRule.onNodeWithTag("library_settings_button")
+            .assertIsDisplayed()
+            .getUnclippedBoundsInRoot()
+
+        assertTrue(
+            "Expected search button (${searchBounds.left}) to be to the left of settings button (${settingsBounds.left})",
+            searchBounds.left < settingsBounds.left
+        )
+    }
+
+    @Test
+    fun `eqPreset Hip-Hop provides calibrated sub-bass boost curve with negative clipping-safe preamp and appears in sheet`() {
+        val hipHop = com.example.model.EqPreset.HIP_HOP
+        assertEquals("Hip-Hop", hipHop.label)
+        assertEquals(10, hipHop.gainsMb.size)
+        // Sub-bass and bass bands (31Hz, 62Hz, 125Hz) are boosted cleanly while preamp compensates
+        assertTrue(hipHop.gainsMb[0] > 0)
+        assertTrue(hipHop.gainsMb[1] >= hipHop.gainsMb[0])
+        assertTrue(hipHop.gainsMb[2] > 0)
+        assertTrue(hipHop.recommendedPreampDb <= -4.0f)
+
+        var selectedSettings = com.example.model.AudioSettings()
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.EqualizerAndDspSheet(
+                    settings = selectedSettings,
+                    bands = com.example.playback.AudioEffectsController().getBands(selectedSettings),
+                    onUpdateSettings = { selectedSettings = it },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("eq_preset_row")
+            .performScrollTo()
+            .performScrollToNode(hasTestTag("eq_preset_hip_hop"))
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("eq_preset_hip_hop").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.model.EqPreset.HIP_HOP, selectedSettings.eqPreset)
+        assertEquals(hipHop.gainsMb, selectedSettings.bandGainsMb)
+        assertEquals(hipHop.recommendedPreampDb, selectedSettings.preampDb, 0.01f)
+    }
+
+    @Test
+    fun `settingsScreen exposes optional GitHub update checker and removes redundant open-source row`() {
+        var checkUpdatesClicks = 0
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.SettingsScreen(
+                    totalTracksCount = 12,
+                    isScanning = false,
+                    excludedFoldersCount = 0,
+                    sdCardFoldersCount = 0,
+                    audioSettings = com.example.model.AudioSettings(),
+                    isSleepTimerActive = false,
+                    preferredTranslationEngine = com.example.ai.TranslationEngine.GOOGLE,
+                    onBack = {},
+                    onRefreshLibrary = {},
+                    onImportFiles = {},
+                    onOpenFoldersManager = {},
+                    onAddSdCardFolder = {},
+                    onOpenEqualizer = {},
+                    onOpenSleepTimer = {},
+                    onUpdateAudioSettings = {},
+                    onSelectTranslationEngine = {},
+                    onOpenAboutAndLegal = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    onCheckUpdatesNow = { checkUpdatesClicks++ }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_about_legal_row"))
+        composeTestRule.onNodeWithTag("settings_check_updates_row").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("settings_auto_updates_switch").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_about_legal_row").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_open_source_row").assertDoesNotExist()
+        assertEquals(1, checkUpdatesClicks)
+    }
+
+    @Test
+    fun `appUpdateChecker parses GitHub URLs, compares semantic versions, and detects available updates`() {
+        assertEquals(
+            "https://github.com/DavooPunk/Davoo-Player",
+            com.example.data.repository.AppUpdateChecker.DEFAULT_GITHUB_REPO_URL
+        )
+        assertEquals(
+            "https://github.com/DavooPunk/Davoo-Player/releases",
+            com.example.data.repository.AppUpdateChecker.DEFAULT_GITHUB_RELEASES_URL
+        )
+        assertEquals(
+            "https://github.com/DavooPunk/Davoo-Player",
+            com.example.data.repository.AppUpdateChecker.normalizeRepoUrl("https://github.com/DavooPunk/Davoo-Player/releases")
+        )
+        assertEquals(
+            "https://github.com/DavooPunk/Davoo-Player",
+            com.example.data.repository.AppUpdateChecker.normalizeRepoUrl("https://github.com/DavooPunk/Davoo-Player.git")
+        )
+        assertEquals(
+            "",
+            com.example.data.repository.AppUpdateChecker.normalizeRepoUrl("[PEGA AQUÍ EL ENLACE DE TU REPOSITORIO]")
+        )
+        assertTrue(com.example.data.repository.AppUpdateChecker.isNewerVersion("v2.1.0", "2.0.2"))
+        assertTrue(com.example.data.repository.AppUpdateChecker.isNewerVersion("2.0.3", "2.0.2"))
+        assertFalse(com.example.data.repository.AppUpdateChecker.isNewerVersion("v2.0.2", "2.0.2"))
+        assertFalse(com.example.data.repository.AppUpdateChecker.isNewerVersion("2.0.1", "2.0.2"))
+
+        val releaseJson = """
+            {
+              "tag_name": "v2.1.0",
+              "html_url": "https://github.com/DavooPunk/Davoo-Player/releases/tag/v2.1.0",
+              "body": "Mejoras de audio"
+            }
+        """.trimIndent()
+        val result = com.example.data.repository.AppUpdateChecker.parseReleaseResponse(
+            rawJson = releaseJson,
+            currentVersion = "2.0.2",
+            fallbackRepoUrl = com.example.data.repository.AppUpdateChecker.DEFAULT_GITHUB_REPO_URL
+        )
+        assertTrue(result is com.example.data.repository.UpdateCheckResult.UpdateAvailable)
+        val info = (result as com.example.data.repository.UpdateCheckResult.UpdateAvailable).info
+        assertEquals("2.1.0", info.latestVersion)
+        assertEquals("https://github.com/DavooPunk/Davoo-Player/releases/tag/v2.1.0", info.releaseUrl)
+        assertEquals("Mejoras de audio", info.releaseNotes)
     }
 }

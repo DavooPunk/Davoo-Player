@@ -139,8 +139,19 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.1",
+        version = "v2.0.2",
         tag = "Actual",
+        items = listOf(
+            "Intercambio de botones en Tu Música: botón de búsqueda (lupa) a la izquierda y botón de Opciones (tuerca) en el extremo derecho de la cabecera.",
+            "Nuevo preset Hip-Hop en el ecualizador de 10 bandas con realce calibrado en subgraves/bajos (31–125 Hz) y Preamp compensado (-4.8 dB) anti-saturación.",
+            "Vista de letras minimalista estilo Spotify: oculta controles superiores al cargar letra, añade menú compacto de traducción (DeepL/Google e idiomas) abajo a la izquierda, gestión LRCLIB/.lrc abajo a la derecha y barra de progreso integrada.",
+            "Comprobador opcional de actualizaciones en GitHub con aviso dentro de la app, notificación nativa opcional y redirección directa al navegador externo.",
+            "Optimización de memoria y CPU: visualizador de espectro con escalado GPU sin relayouts, limpieza de caché de colores de carátula ante baja memoria, bypass rápido del ecualizador y limpieza de Ajustes."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.1",
+        tag = "Anterior",
         items = listOf(
             "Buscador global fijo en cabecera: botón de lupa siempre visible arriba a la derecha en Biblioteca, Álbumes y Playlists para filtrar canciones, álbumes, artistas y listas en tiempo real desde un único lugar.",
             "Ecualizador avanzado de 10 bandas (31 Hz a 16 kHz) con Preamp dedicado (-12 a +12 dB) y limitador suave en tiempo real mediante procesamiento PCM bicuádrico.",

@@ -186,6 +186,8 @@ class PlaybackController(
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
         mediaController = null
+        bandHelper.release()
+        trackLookup = emptyMap()
         _playerFlow.value = null
     }
 

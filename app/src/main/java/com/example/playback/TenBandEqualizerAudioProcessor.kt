@@ -33,6 +33,7 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
 
     private data class EqSnapshot(
         val enabled: Boolean,
+        val isBypass: Boolean,
         val preampLinear: Double,
         val bandGainsMb: List<Int>
     )
@@ -54,6 +55,7 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
     @Volatile
     private var targetSnapshot = EqSnapshot(
         enabled = false,
+        isBypass = true,
         preampLinear = 1.0,
         bandGainsMb = List(BAND_COUNT) { 0 }
     )
@@ -73,8 +75,13 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
             bandGainsMb.getOrElse(idx) { 0 }.coerceIn(MIN_BAND_MB, MAX_BAND_MB)
         }
         val linearPreamp = 10.0.pow(safePreamp.toDouble() / 20.0)
+        val bypass = !eqEnabled || (
+            normalizedGains.all { it == 0 } &&
+                kotlin.math.abs(linearPreamp - 1.0) < 1e-4
+            )
         targetSnapshot = EqSnapshot(
             enabled = eqEnabled,
+            isBypass = bypass,
             preampLinear = linearPreamp,
             bandGainsMb = normalizedGains
         )
@@ -112,11 +119,7 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
         val snap = targetSnapshot
         val outputBuffer = replaceOutputBuffer(remaining)
 
-        val isBypass = !snap.enabled || (
-            snap.bandGainsMb.all { it == 0 } &&
-                kotlin.math.abs(snap.preampLinear - 1.0) < 1e-4
-            )
-        if (isBypass) {
+        if (snap.isBypass) {
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
             return

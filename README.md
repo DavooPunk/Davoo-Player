@@ -1,37 +1,22 @@
-<p align="center">
-  <img src="banner.png?v=2" alt="Davoo Player Banner" width="100%">
-</p>
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-# 🎵 Davoo Player
+# Run and deploy your AI Studio app
 
-**Davoo Player** es un reproductor de música local nativo para Android diseñado para gestionar bibliotecas extensas de audio de alta fidelidad (FLAC y formatos sin pérdida), con una interfaz oscura minimalista, acceso directo a metadatos y un motor de ecualización avanzado.
+This contains everything you need to run your app locally.
 
----
+View your app in AI Studio: https://ai.studio/apps/9c9be1f9-a085-4980-a776-54a158dfaafb
 
-## ✨ Características Principales
+## Run Locally
 
-* **Soporte de Audio Lossless & Metadatos:** Reproducción fluida de archivos **FLAC**, MP3, WAV, OGG y M4A con indicadores visuales de formato y visualización detallada de metadatos a la mano.
-* **Ecualizador Gráfico de 10 Bandas + Preamp:** Ajuste fino desde 31 Hz hasta 16 kHz (-12 dB a +12 dB) acompañado de control de preamplificador (Preamp) para evitar distorsión (*clipping*).
-* **Perfiles de Audífonos (Estilo AutoEq / Poweramp):** Incluye curvas de ecualización calibradas para modelos populares de audífonos e IEMs (Sony, Sennheiser, Audio-Technica, Apple, Samsung, KZ, entre otros) y presets clásicos personalizables.
-* **Navegación Rápida y Búsqueda Global:** Organización por **Álbumes, Artistas, Géneros y Carpetas**, con buscador global fijo siempre accesible en la cabecera.
-* **Gestión Optimizada de Carpetas:** Escaneo y eliminación por lotes (*batch processing*) que permite agregar o quitar carpetas con cientos de álbumes de forma instantánea sin bloquear la interfaz.
-* **Interfaz Dark Mode:** Diseño limpio con paleta oscura y acentos cálidos pensado para uso prolongado y bajo consumo.
+**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
 
----
 
-## 🛠️ Stack Tecnológico
-
-* **Lenguaje:** Kotlin
-* **Sistema de Construcción:** Gradle (Kotlin DSL) + Android SDK
-* **Procesamiento de Audio:** Android Audio Effects / Equalizer API
-
----
-
-## 🚀 Compilación desde el Código Fuente
-
-Si deseas compilar el proyecto manualmente desde la terminal:
-
-1. **Clona el repositorio:**
-   ```bash
-   git clone [https://github.com/DavooPunk/Davoo-Player.git](https://github.com/DavooPunk/Davoo-Player.git)
-   cd Davoo-Player
+1. Open Android Studio
+2. Select **Open** and choose the directory containing this project
+3. Allow Android Studio to fix any incompatibilities as it imports the project.
+4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
+5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
+6. Run the app on an emulator or physical device
+7. If you have already published your app in AI Studio, please [request upload key reset](https://support.google.com/googleplay/android-developer/answer/9842756#zippy=%2Crequest-an-upload-key-reset) in Google Play Console.

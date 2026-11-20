@@ -18,6 +18,13 @@ object ArtworkColorExtractor {
 
     private val colorCache = LruCache<String, Color>(32)
 
+    fun trimMemory(level: Int) {
+        when {
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> colorCache.evictAll()
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> colorCache.trimToSize(16)
+        }
+    }
+
     suspend fun extractAccentColor(
         context: Context,
         audioUri: String,

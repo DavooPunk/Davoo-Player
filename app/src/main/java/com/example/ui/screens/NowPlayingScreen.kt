@@ -75,6 +75,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -691,7 +692,11 @@ private fun LiveSpectrumVisualizer(
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .height((16f * level).dp)
+                    .height(16.dp)
+                    .graphicsLayer {
+                        scaleY = level.coerceIn(0.15f, 1f)
+                        transformOrigin = TransformOrigin(0.5f, 1f)
+                    }
                     .clip(RoundedCornerShape(2.dp))
                     .background(accentColor)
             )

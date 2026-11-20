@@ -195,6 +195,7 @@ enum class EqPreset(val label: String, val gainsMb: List<Int>, val recommendedPr
     JAZZ("Jazz", listOf(350, 250, 150, 100, -150, -100, 150, 250, 350, 400), -2.5f),
     CLASSICAL("Clásica", listOf(400, 300, 150, 50, -100, -50, 150, 300, 400, 450), -3.0f),
     ELECTRONIC("Electrónica", listOf(550, 450, 250, 0, -150, 100, 200, 350, 450, 500), -4.0f),
+    HIP_HOP("Hip-Hop", listOf(580, 620, 340, -120, -180, 0, 180, 320, 360, 280), -4.8f),
     V_SHAPE("V-Shape", listOf(550, 450, 200, -150, -300, -250, 100, 350, 550, 500), -4.0f),
     CUSTOM("Personalizado", List(10) { 0 }, 0f);
 

@@ -2,13 +2,16 @@ package com.example.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -16,12 +19,12 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -31,14 +34,14 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNote
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.SdCard
@@ -47,6 +50,8 @@ import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -59,14 +64,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,6 +83,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -116,7 +126,10 @@ fun LyricsBottomSheet(
     onTranslateLyrics: ((LyricsData, LyricsTranslationLanguage, TranslationEngine) -> Unit)? = null,
     onSaveManualTranslation: ((LyricsData, String, LyricsTranslationLanguage) -> Unit)? = null,
     onClearSavedTranslation: (() -> Unit)? = null,
-    onOpenHumanTranslationSite: ((url: String, siteName: String) -> Unit)? = null
+    onOpenHumanTranslationSite: ((url: String, siteName: String) -> Unit)? = null,
+    durationMs: Long = track.durationMs,
+    isPlaying: Boolean = false,
+    onTogglePlayPause: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
@@ -132,17 +145,21 @@ fun LyricsBottomSheet(
     var hasSearchedOnce by remember(track.id) { mutableStateOf(false) }
 
     var selectedTargetLanguage by remember(track.id) { mutableStateOf(LyricsTranslationLanguage.SPANISH) }
-    var showLanguagePicker by remember(track.id) { mutableStateOf(false) }
+    var showTranslateMenu by remember(track.id) { mutableStateOf(false) }
+    var showManageMenu by remember(track.id) { mutableStateOf(false) }
     var showManualTranslationEditor by remember(track.id) { mutableStateOf(false) }
     var manualTranslationDraft by remember(track.id) { mutableStateOf("") }
     var displayMode by remember(track.id) { mutableStateOf(LyricsDisplayMode.BILINGUAL) }
 
+    val hasLoadedLyrics = !isLoading && lyrics != null && lyrics.lines.isNotEmpty()
     val hasNativeBilingual = lyrics?.hasEmbeddedTranslation == true
     val activeTranslationSuccess = (translationState as? LyricsTranslationUiState.Success)
         ?.takeIf { it.trackId == track.id && it.translatedLyrics.lines.size == lyrics?.lines?.size }
     val hasAnyTranslation = hasNativeBilingual || activeTranslationSuccess != null
     val isTranslating = translationState is LyricsTranslationUiState.Loading
     val translationError = translationState as? LyricsTranslationUiState.Error
+    val isPersistedLyrics = lyrics?.sourceLabel == AudioTagParsers.SAVED_LRC_SOURCE_LABEL ||
+        lyrics?.sourceLabel == AudioTagParsers.ONLINE_LRC_SOURCE_LABEL
 
     LaunchedEffect(activeTranslationSuccess?.language) {
         if (activeTranslationSuccess != null) {
@@ -195,18 +212,19 @@ fun LyricsBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = Color(0xFF0E1117)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .heightIn(min = 380.dp, max = 660.dp)
                 .imePadding()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
+                .padding(bottom = 20.dp)
                 .testTag("lyrics_bottom_sheet"),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // Minimal Spotify-style Header: Track Title + Artist + Close button only when lyrics exist
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -222,421 +240,264 @@ fun LyricsBottomSheet(
                         Text(
                             text = track.title,
                             style = MaterialTheme.typography.titleMedium,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = lyrics?.sourceLabel ?: "Letras y sincronización (.lrc)",
+                            text = if (hasLoadedLyrics) {
+                                track.artist.ifBlank { lyrics?.sourceLabel.orEmpty() }
+                            } else {
+                                lyrics?.sourceLabel ?: "Letras y sincronización (.lrc)"
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color.White.copy(alpha = 0.62f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Cerrar letras")
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.minimumInteractiveComponentSize()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Cerrar letras",
+                        tint = Color.White.copy(alpha = 0.8f)
+                    )
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (onSearchOnlineLyrics != null) {
-                    FilledTonalButton(
-                        onClick = {
-                            if (showOnlineSearch && hasSearchedOnce) {
-                                showOnlineSearch = false
-                            } else {
-                                triggerOnlineSearch(null)
-                            }
-                        },
+            // Show top action buttons ONLY when no lyrics are loaded yet (clean view once lyrics load)
+            if (!hasLoadedLyrics && !isLoading) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("lyrics_empty_top_actions"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onSearchOnlineLyrics != null) {
+                        FilledTonalButton(
+                            onClick = {
+                                if (showOnlineSearch && hasSearchedOnce) {
+                                    showOnlineSearch = false
+                                } else {
+                                    triggerOnlineSearch(null)
+                                }
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("download_online_lyrics_button")
+                        ) {
+                            Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (showOnlineSearch) "Ocultar búsqueda" else "Descargar letra")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onPickLrcFile,
                         modifier = Modifier
                             .weight(1f)
-                            .testTag("download_online_lyrics_button")
+                            .testTag("load_lrc_button")
                     ) {
-                        Icon(Icons.Rounded.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (showOnlineSearch) "Ocultar búsqueda" else "Descargar letra")
-                    }
-                }
-                OutlinedButton(
-                    onClick = onPickLrcFile,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("load_lrc_button")
-                ) {
-                    Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Archivo .lrc")
-                }
-                val isPersistedLyrics = lyrics?.sourceLabel == AudioTagParsers.SAVED_LRC_SOURCE_LABEL ||
-                    lyrics?.sourceLabel == AudioTagParsers.ONLINE_LRC_SOURCE_LABEL
-                if (onClearSavedLyrics != null && isPersistedLyrics) {
-                    IconButton(
-                        onClick = onClearSavedLyrics,
-                        modifier = Modifier.testTag("clear_saved_lrc_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.DeleteOutline,
-                            contentDescription = "Quitar letra guardada",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Text("Archivo .lrc")
                     }
                 }
             }
 
-            val showTranslationControls = lyrics != null &&
-                lyrics.lines.isNotEmpty() &&
-                !isLoading &&
-                (onTranslateLyrics != null || onSaveManualTranslation != null || hasNativeBilingual)
+            if (isTranslating) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("lyrics_translation_loading"),
+                    color = LosslessCyan
+                )
+            }
 
-            if (showTranslationControls) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+            if (translationError != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("lyrics_translation_error")
                 ) {
-                    if (onTranslateLyrics != null || onSaveManualTranslation != null) {
-                        if (onTranslateLyrics != null) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .testTag("lyrics_engine_selector_row"),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Traductor:",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                TranslationEngine.entries.forEach { engine ->
-                                    val isSelected = selectedEngine == engine
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = { onSelectEngine?.invoke(engine) },
-                                        label = { Text(engine.shortLabel) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
-                                            selectedLabelColor = LosslessCyan
-                                        ),
-                                        modifier = Modifier.testTag("lyrics_engine_${engine.name.lowercase()}")
-                                    )
-                                }
-                            }
-                        }
-
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = translationError.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.End
                         ) {
-                            if (onTranslateLyrics != null) {
-                                FilledTonalButton(
+                            if (lyrics != null && onTranslateLyrics != null && translationError.engine == TranslationEngine.DEEPL) {
+                                TextButton(
                                     onClick = {
-                                        onTranslateLyrics(lyrics, selectedTargetLanguage, selectedEngine)
+                                        onSelectEngine?.invoke(TranslationEngine.GOOGLE)
+                                        onTranslateLyrics(lyrics, translationError.language, TranslationEngine.GOOGLE)
                                     },
-                                    enabled = !isTranslating,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("translate_lyrics_button")
+                                    modifier = Modifier.testTag("error_switch_to_google_button")
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Translate,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isTranslating) {
-                                            "${selectedEngine.shortLabel} (${selectedTargetLanguage.code.uppercase()})..."
-                                        } else {
-                                            "${selectedEngine.shortLabel} · ${selectedTargetLanguage.displayName}"
-                                        },
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    Text("Usar Google")
                                 }
                             }
-
-                            OutlinedButton(
-                                onClick = { showLanguagePicker = !showLanguagePicker },
-                                modifier = Modifier.testTag("translation_language_picker_button")
-                            ) {
-                                Text(selectedTargetLanguage.code.uppercase())
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = if (showLanguagePicker) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                    contentDescription = "Cambiar idioma de traducción",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-
                             if (onSaveManualTranslation != null) {
-                                IconButton(
+                                TextButton(
+                                    onClick = { showManualTranslationEditor = true },
+                                    modifier = Modifier.testTag("error_paste_translation_button")
+                                ) {
+                                    Text("Pegar traducción")
+                                }
+                            }
+                            if (lyrics != null && onTranslateLyrics != null) {
+                                TextButton(
                                     onClick = {
-                                        if (!showManualTranslationEditor && manualTranslationDraft.isBlank()) {
-                                            manualTranslationDraft = activeTranslationSuccess?.translatedLyrics
-                                                ?.let { AudioTagParsers.serializeTranslationLines(it) }
-                                                ?: lyrics.lines.mapNotNull { it.secondaryText }
-                                                    .takeIf { it.isNotEmpty() }
-                                                    ?.joinToString("\n")
-                                                ?: ""
-                                        }
-                                        showManualTranslationEditor = !showManualTranslationEditor
+                                        onTranslateLyrics(lyrics, translationError.language, translationError.engine)
                                     },
-                                    modifier = Modifier.testTag("edit_translation_button")
+                                    modifier = Modifier.testTag("retry_translation_button")
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.EditNote,
-                                        contentDescription = "Pegar o editar traducción offline",
-                                        tint = if (showManualTranslationEditor) CopperAmber else LosslessCyan
-                                    )
+                                    Text("Reintentar")
                                 }
                             }
                         }
                     }
+                }
+            }
 
-                    AnimatedVisibility(visible = showLanguagePicker) {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("translation_language_list"),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(LyricsTranslationLanguage.entries) { language ->
-                                val isSelected = language == selectedTargetLanguage
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = {
-                                        selectedTargetLanguage = language
-                                        showLanguagePicker = false
-                                        onTranslateLyrics?.invoke(lyrics, language, selectedEngine)
-                                    },
-                                    label = { Text(language.displayName) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
-                                        selectedLabelColor = LosslessCyan
-                                    ),
-                                    modifier = Modifier.testTag("translation_lang_${language.code}")
-                                )
-                            }
-                        }
-                    }
-
-                    AnimatedVisibility(visible = showManualTranslationEditor && onSaveManualTranslation != null) {
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.45f)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("manual_translation_editor_panel")
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "Traducción humana / edición offline",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = CopperAmber
-                                )
-                                Text(
-                                    text = "Pega una traducción línea por línea (o archivo .lrc) y se sincronizará y guardará en tu dispositivo.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-
-                                if (onOpenHumanTranslationSite != null) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                onOpenHumanTranslationSite(
-                                                    HumanLyricsTranslationLinks.buildLetrasSearchUrl(track.title, track.artist),
-                                                    "Letras.com"
-                                                )
-                                            },
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .testTag("open_letras_com_button")
-                                        ) {
-                                            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("Letras.com", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                        OutlinedButton(
-                                            onClick = {
-                                                onOpenHumanTranslationSite(
-                                                    HumanLyricsTranslationLinks.buildLyricsTranslateSearchUrl(track.title, track.artist),
-                                                    "LyricsTranslate"
-                                                )
-                                            },
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .testTag("open_lyricstranslate_button")
-                                        ) {
-                                            Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("LyricsTranslate", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                }
-
-                                OutlinedTextField(
-                                    value = manualTranslationDraft,
-                                    onValueChange = { manualTranslationDraft = it },
-                                    label = { Text("Traducción (${selectedTargetLanguage.displayName})") },
-                                    placeholder = { Text("Pega aquí la letra traducida, una línea por verso…") },
-                                    minLines = 2,
-                                    maxLines = 5,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("manual_translation_input")
-                                )
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (onClearSavedTranslation != null && activeTranslationSuccess != null) {
-                                        TextButton(
-                                            onClick = {
-                                                onClearSavedTranslation()
-                                                manualTranslationDraft = ""
-                                                showManualTranslationEditor = false
-                                            },
-                                            modifier = Modifier.testTag("clear_saved_translation_button")
-                                        ) {
-                                            Text("Eliminar")
-                                        }
-                                    }
-                                    Button(
-                                        onClick = {
-                                            onSaveManualTranslation?.invoke(
-                                                lyrics,
-                                                manualTranslationDraft,
-                                                selectedTargetLanguage
-                                            )
-                                            showManualTranslationEditor = false
-                                        },
-                                        enabled = manualTranslationDraft.isNotBlank(),
-                                        modifier = Modifier.testTag("save_manual_translation_button")
-                                    ) {
-                                        Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Guardar offline")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (isTranslating) {
-                        LinearProgressIndicator(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("lyrics_translation_loading"),
-                            color = LosslessCyan
-                        )
-                    }
-
-                    if (translationError != null) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("lyrics_translation_error")
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = translationError.message,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End
-                                ) {
-                                    if (onTranslateLyrics != null && translationError.engine == TranslationEngine.DEEPL) {
-                                        TextButton(
-                                            onClick = {
-                                                onSelectEngine?.invoke(TranslationEngine.GOOGLE)
-                                                onTranslateLyrics(lyrics, translationError.language, TranslationEngine.GOOGLE)
-                                            },
-                                            modifier = Modifier.testTag("error_switch_to_google_button")
-                                        ) {
-                                            Text("Usar Google")
-                                        }
-                                    }
-                                    if (onSaveManualTranslation != null) {
-                                        TextButton(
-                                            onClick = { showManualTranslationEditor = true },
-                                            modifier = Modifier.testTag("error_paste_translation_button")
-                                        ) {
-                                            Text("Pegar traducción")
-                                        }
-                                    }
-                                    if (onTranslateLyrics != null) {
-                                        TextButton(
-                                            onClick = {
-                                                onTranslateLyrics(lyrics, translationError.language, translationError.engine)
-                                            },
-                                            modifier = Modifier.testTag("retry_translation_button")
-                                        ) {
-                                            Text("Reintentar")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (hasAnyTranslation) {
+            AnimatedVisibility(visible = showManualTranslationEditor && onSaveManualTranslation != null && lyrics != null) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.45f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("manual_translation_editor_panel")
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .padding(12.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            LazyRow(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("lyrics_display_mode_row"),
+                            Text(
+                                text = "Traducción humana / edición offline",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = CopperAmber
+                            )
+                            IconButton(
+                                onClick = { showManualTranslationEditor = false },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Cerrar editor")
+                            }
+                        }
+                        Text(
+                            text = "Pega una traducción línea por línea (o archivo .lrc) y se sincronizará y guardará en tu dispositivo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        if (onOpenHumanTranslationSite != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(LyricsDisplayMode.entries) { mode ->
-                                    FilterChip(
-                                        selected = displayMode == mode,
-                                        onClick = { displayMode = mode },
-                                        label = { Text(mode.label) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = CopperAmber.copy(alpha = 0.2f),
-                                            selectedLabelColor = CopperAmber
-                                        ),
-                                        modifier = Modifier.testTag("lyrics_mode_${mode.name}")
-                                    )
+                                OutlinedButton(
+                                    onClick = {
+                                        onOpenHumanTranslationSite(
+                                            HumanLyricsTranslationLinks.buildLetrasSearchUrl(track.title, track.artist),
+                                            "Letras.com"
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("open_letras_com_button")
+                                ) {
+                                    Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Letras.com", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        onOpenHumanTranslationSite(
+                                            HumanLyricsTranslationLinks.buildLyricsTranslateSearchUrl(track.title, track.artist),
+                                            "LyricsTranslate"
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("open_lyricstranslate_button")
+                                ) {
+                                    Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("LyricsTranslate", maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
-                            if (hasNativeBilingual || activeTranslationSuccess?.isSavedOffline == true) {
-                                Icon(
-                                    imageVector = Icons.Rounded.OfflinePin,
-                                    contentDescription = "Disponible sin conexión",
-                                    tint = LosslessCyan,
-                                    modifier = Modifier
-                                        .padding(start = 6.dp)
-                                        .size(18.dp)
-                                        .testTag("translation_offline_badge")
-                                )
+                        }
+
+                        OutlinedTextField(
+                            value = manualTranslationDraft,
+                            onValueChange = { manualTranslationDraft = it },
+                            label = { Text("Traducción (${selectedTargetLanguage.displayName})") },
+                            placeholder = { Text("Pega aquí la letra traducida, una línea por verso…") },
+                            minLines = 2,
+                            maxLines = 4,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("manual_translation_input")
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (onClearSavedTranslation != null && activeTranslationSuccess != null) {
+                                TextButton(
+                                    onClick = {
+                                        onClearSavedTranslation()
+                                        manualTranslationDraft = ""
+                                        showManualTranslationEditor = false
+                                    },
+                                    modifier = Modifier.testTag("clear_saved_translation_button")
+                                ) {
+                                    Text("Eliminar")
+                                }
+                            }
+                            Button(
+                                onClick = {
+                                    lyrics?.let { currentLyrics ->
+                                        onSaveManualTranslation?.invoke(
+                                            currentLyrics,
+                                            manualTranslationDraft,
+                                            selectedTargetLanguage
+                                        )
+                                    }
+                                    showManualTranslationEditor = false
+                                },
+                                enabled = manualTranslationDraft.isNotBlank(),
+                                modifier = Modifier.testTag("save_manual_translation_button")
+                            ) {
+                                Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Guardar offline")
                             }
                         }
                     }
@@ -654,11 +515,11 @@ fun LyricsBottomSheet(
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             OutlinedTextField(
@@ -679,6 +540,15 @@ fun LyricsBottomSheet(
                                     imageVector = Icons.Rounded.Search,
                                     contentDescription = "Buscar letra en línea",
                                     tint = LosslessCyan
+                                )
+                            }
+                            IconButton(
+                                onClick = { showOnlineSearch = false },
+                                modifier = Modifier.testTag("close_online_search_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Ocultar búsqueda"
                                 )
                             }
                         }
@@ -702,7 +572,7 @@ fun LyricsBottomSheet(
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 200.dp),
+                                    .heightIn(max = 180.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 itemsIndexed(onlineResults.take(10), key = { _, item -> item.id }) { _, candidate ->
@@ -788,115 +658,525 @@ fun LyricsBottomSheet(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-            when {
-                isLoading -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
+            // Main Lyrics Display Area (fills nearly the entire view cleanly with high contrast)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                when {
+                    isLoading -> {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = Color.White)
+                        }
                     }
-                }
 
-                lyrics == null || lyrics.lines.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 22.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "No se encontró letra para esta canción",
-                            style = MaterialTheme.typography.titleSmall,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = "Davoo Player puede descargar letras .lrc directamente desde LRCLIB, abrir Lyricsify en tu navegador o cargar un archivo .lrc local.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
+                    lyrics == null || lyrics.lines.isEmpty() -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(vertical = 24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "No se encontró letra para esta canción",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Color.White,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Davoo Player puede descargar letras .lrc directamente desde LRCLIB, abrir Lyricsify en tu navegador o cargar un archivo .lrc local.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color.White.copy(alpha = 0.65f),
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
-                }
 
-                else -> {
-                    val translatedLines = activeTranslationSuccess?.translatedLyrics?.lines
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 180.dp, max = 380.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        itemsIndexed(lyrics.lines) { index, line ->
-                            val isActive = index == activeLineIndex
-                            val resolvedTranslatedText = translatedLines?.getOrNull(index)?.text
-                                ?: line.secondaryText
-                            val clickableMod = if (line.timestampMs != null) {
-                                Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { onSeekTo(line.timestampMs) }
-                            } else Modifier
-
-                            Row(
+                    else -> {
+                        val translatedLines = activeTranslationSuccess?.translatedLyrics?.lines
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF141821),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            LazyColumn(
+                                state = listState,
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(clickableMod)
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.Top
+                                    .fillMaxSize()
+                                    .testTag("spotify_lyrics_list"),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 18.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
-                                if (line.timestampMs != null) {
-                                    Text(
-                                        text = formatDuration(line.timestampMs),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isActive) LosslessCyan
-                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                        modifier = Modifier.padding(top = 3.dp)
-                                    )
-                                }
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    val primaryText = when {
-                                        !resolvedTranslatedText.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
-                                            resolvedTranslatedText
-                                        else -> line.text
-                                    }
-                                    Text(
-                                        text = primaryText,
-                                        style = if (isActive) MaterialTheme.typography.titleMedium
-                                        else MaterialTheme.typography.bodyLarge,
-                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isActive) LosslessCyan
-                                        else MaterialTheme.colorScheme.onSurface.copy(
-                                            alpha = if (lyrics.isSynced) 0.78f else 0.94f
-                                        )
-                                    )
-                                    if (!resolvedTranslatedText.isNullOrBlank() &&
-                                        displayMode == LyricsDisplayMode.BILINGUAL &&
-                                        !resolvedTranslatedText.equals(line.text, ignoreCase = true)
+                                itemsIndexed(lyrics.lines) { index, line ->
+                                    val isActive = index == activeLineIndex
+                                    val resolvedTranslatedText = translatedLines?.getOrNull(index)?.text
+                                        ?: line.secondaryText
+                                    val clickableMod = if (line.timestampMs != null) {
+                                        Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .clickable { onSeekTo(line.timestampMs) }
+                                    } else Modifier
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(clickableMod)
+                                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
+                                        val primaryText = when {
+                                            !resolvedTranslatedText.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
+                                                resolvedTranslatedText
+                                            else -> line.text
+                                        }
                                         Text(
-                                            text = resolvedTranslatedText,
-                                            style = if (isActive) MaterialTheme.typography.bodyMedium
-                                            else MaterialTheme.typography.bodySmall,
-                                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                                            color = if (isActive) CopperAmber
-                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                            text = primaryText,
+                                            style = if (isActive) {
+                                                MaterialTheme.typography.titleLarge
+                                            } else {
+                                                MaterialTheme.typography.titleMedium
+                                            },
+                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isActive) {
+                                                Color.White
+                                            } else {
+                                                Color.White.copy(alpha = if (lyrics.isSynced) 0.42f else 0.85f)
+                                            }
                                         )
+                                        if (!resolvedTranslatedText.isNullOrBlank() &&
+                                            displayMode == LyricsDisplayMode.BILINGUAL &&
+                                            !resolvedTranslatedText.equals(line.text, ignoreCase = true)
+                                        ) {
+                                            Text(
+                                                text = resolvedTranslatedText,
+                                                style = if (isActive) {
+                                                    MaterialTheme.typography.bodyLarge
+                                                } else {
+                                                    MaterialTheme.typography.bodyMedium
+                                                },
+                                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = if (isActive) {
+                                                    CopperAmber
+                                                } else {
+                                                    Color.White.copy(alpha = 0.34f)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+                }
+            }
+
+            // Minimalist Spotify-style Bottom Corner Bar: ONLY 2 discrete corner icons directly below lyrics
+            if (hasLoadedLyrics) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("spotify_lyrics_bottom_bar"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Bottom-Left: Compact Translate Menu Icon (文A)
+                    Box {
+                        Surface(
+                            onClick = {
+                                val canTranslateOrToggle = onTranslateLyrics != null ||
+                                    onSaveManualTranslation != null ||
+                                    hasAnyTranslation
+                                if (canTranslateOrToggle) {
+                                    showTranslateMenu = true
+                                }
+                            },
+                            shape = CircleShape,
+                            color = if (hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL) {
+                                LosslessCyan.copy(alpha = 0.18f)
+                            } else {
+                                Color.White.copy(alpha = 0.08f)
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("lyrics_translate_menu_button")
+                        ) {
+                            Box(
+                                modifier = Modifier.size(40.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Translate,
+                                    contentDescription = "Traducir o cambiar idioma de letra",
+                                    tint = if (hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL) {
+                                        LosslessCyan
+                                    } else {
+                                        Color.White.copy(alpha = 0.85f)
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showTranslateMenu,
+                            onDismissRequest = { showTranslateMenu = false },
+                            modifier = Modifier
+                                .widthIn(min = 250.dp, max = 310.dp)
+                                .testTag("lyrics_translate_floating_menu")
+                        ) {
+                            if (onTranslateLyrics != null) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (isTranslating) {
+                                                "Traduciendo con ${selectedEngine.shortLabel}…"
+                                            } else if (hasAnyTranslation) {
+                                                "Volver a traducir (${selectedEngine.shortLabel} · ${selectedTargetLanguage.displayName})"
+                                            } else {
+                                                "Traducir letra (${selectedEngine.shortLabel} · ${selectedTargetLanguage.displayName})"
+                                            },
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.Translate, contentDescription = null, tint = LosslessCyan)
+                                    },
+                                    enabled = !isTranslating,
+                                    onClick = {
+                                        showTranslateMenu = false
+                                        onTranslateLyrics(lyrics, selectedTargetLanguage, selectedEngine)
+                                    },
+                                    modifier = Modifier.testTag("translate_lyrics_button")
+                                )
+                            }
+
+                            if (hasAnyTranslation) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Vista de letra",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (hasNativeBilingual || activeTranslationSuccess?.isSavedOffline == true) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.OfflinePin,
+                                                contentDescription = "Disponible sin conexión",
+                                                tint = LosslessCyan,
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .testTag("translation_offline_badge")
+                                            )
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .width(268.dp)
+                                            .horizontalScroll(rememberScrollState())
+                                            .testTag("lyrics_display_mode_row"),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        LyricsDisplayMode.entries.forEach { mode ->
+                                            FilterChip(
+                                                selected = displayMode == mode,
+                                                onClick = { displayMode = mode },
+                                                label = { Text(mode.label, style = MaterialTheme.typography.labelSmall) },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = CopperAmber.copy(alpha = 0.2f),
+                                                    selectedLabelColor = CopperAmber
+                                                ),
+                                                modifier = Modifier.testTag("lyrics_mode_${mode.name}")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (onTranslateLyrics != null) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Motor de traducción",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("lyrics_engine_selector_row"),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        TranslationEngine.entries.forEach { engine ->
+                                            val isSelected = selectedEngine == engine
+                                            FilterChip(
+                                                selected = isSelected,
+                                                onClick = { onSelectEngine?.invoke(engine) },
+                                                label = { Text(engine.shortLabel, style = MaterialTheme.typography.labelSmall) },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
+                                                    selectedLabelColor = LosslessCyan
+                                                ),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("lyrics_engine_${engine.name.lowercase()}")
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = "Idioma destino",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .width(268.dp)
+                                            .horizontalScroll(rememberScrollState())
+                                            .testTag("translation_language_list"),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        LyricsTranslationLanguage.entries.forEach { language ->
+                                            val isSelected = language == selectedTargetLanguage
+                                            FilterChip(
+                                                selected = isSelected,
+                                                onClick = {
+                                                    selectedTargetLanguage = language
+                                                    showTranslateMenu = false
+                                                    onTranslateLyrics.invoke(lyrics, language, selectedEngine)
+                                                },
+                                                label = { Text(language.displayName, style = MaterialTheme.typography.labelSmall) },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
+                                                    selectedLabelColor = LosslessCyan
+                                                ),
+                                                modifier = Modifier.testTag("translation_lang_${language.code}")
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (onSaveManualTranslation != null) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                DropdownMenuItem(
+                                    text = { Text("Editar / pegar traducción offline") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.EditNote, contentDescription = null, tint = CopperAmber)
+                                    },
+                                    onClick = {
+                                        if (manualTranslationDraft.isBlank()) {
+                                            manualTranslationDraft = activeTranslationSuccess?.translatedLyrics
+                                                ?.let { AudioTagParsers.serializeTranslationLines(it) }
+                                                ?: lyrics.lines.mapNotNull { it.secondaryText }
+                                                    .takeIf { it.isNotEmpty() }
+                                                    ?.joinToString("\n")
+                                                ?: ""
+                                        }
+                                        showTranslateMenu = false
+                                        showManualTranslationEditor = true
+                                    },
+                                    modifier = Modifier.testTag("edit_translation_button")
+                                )
+                            }
+                        }
+                    }
+
+                    // Subtle centered translation status indicator only when translated
+                    if (hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL) {
+                        Text(
+                            text = "${selectedTargetLanguage.code.uppercase()} · ${displayMode.label}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = LosslessCyan.copy(alpha = 0.85f)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    // Bottom-Right: Compact Download / File Management Icon
+                    Box {
+                        Surface(
+                            onClick = { showManageMenu = true },
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.08f),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("lyrics_manage_menu_button")
+                        ) {
+                            Box(
+                                modifier = Modifier.size(40.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CloudDownload,
+                                    contentDescription = "Opciones de descarga y archivo .lrc",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = showManageMenu,
+                            onDismissRequest = { showManageMenu = false },
+                            modifier = Modifier.testTag("lyrics_manage_floating_menu")
+                        ) {
+                            if (onSearchOnlineLyrics != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Descargar nueva letra (LRCLIB)") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = LosslessCyan)
+                                    },
+                                    onClick = {
+                                        showManageMenu = false
+                                        triggerOnlineSearch(null)
+                                    },
+                                    modifier = Modifier.testTag("menu_download_online_lyrics_button")
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Seleccionar archivo .lrc local") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.UploadFile, contentDescription = null)
+                                },
+                                onClick = {
+                                    showManageMenu = false
+                                    onPickLrcFile()
+                                },
+                                modifier = Modifier.testTag("menu_load_lrc_button")
+                            )
+                            if (onOpenLyricsify != null) {
+                                DropdownMenuItem(
+                                    text = { Text("Buscar en Lyricsify") },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.OpenInBrowser, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showManageMenu = false
+                                        onOpenLyricsify(onlineQuery.ifBlank { track.title })
+                                    },
+                                    modifier = Modifier.testTag("menu_open_lyricsify_button")
+                                )
+                            }
+                            if (onClearSavedLyrics != null && isPersistedLyrics) {
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "Eliminar letra actual",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        showManageMenu = false
+                                        onClearSavedLyrics()
+                                    },
+                                    modifier = Modifier.testTag("clear_saved_lrc_button")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Spotify-style Playback Progress Bar right below the two corner icons
+            val totalDurationMs = durationMs.coerceAtLeast(track.durationMs).coerceAtLeast(1L)
+            var isScrubbing by remember(track.id) { mutableStateOf(false) }
+            var scrubFraction by remember(track.id) { mutableFloatStateOf(0f) }
+            val progressFraction = if (isScrubbing) {
+                scrubFraction
+            } else {
+                (positionMs.toFloat() / totalDurationMs.toFloat()).coerceIn(0f, 1f)
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("lyrics_playback_progress_bar")
+            ) {
+                Slider(
+                    value = progressFraction,
+                    onValueChange = { fraction ->
+                        isScrubbing = true
+                        scrubFraction = fraction
+                    },
+                    onValueChangeFinished = {
+                        onSeekTo((scrubFraction * totalDurationMs).toLong())
+                        isScrubbing = false
+                    },
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.24f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("lyrics_playback_slider")
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val displayedPos = if (isScrubbing) (scrubFraction * totalDurationMs).toLong() else positionMs
+                    Text(
+                        text = formatDuration(displayedPos),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.65f)
+                    )
+                    if (onTogglePlayPause != null) {
+                        Surface(
+                            onClick = onTogglePlayPause,
+                            shape = CircleShape,
+                            color = Color.White,
+                            modifier = Modifier
+                                .size(34.dp)
+                                .testTag("lyrics_play_pause_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                                    tint = Color(0xFF0E1117),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = formatDuration(totalDurationMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.65f)
+                    )
                 }
             }
         }

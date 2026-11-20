@@ -9,15 +9,20 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
+import com.example.BuildConfig
 import com.example.ai.LyricsTranslationCoordinator
 import com.example.ai.LyricsTranslationLanguage
 import com.example.ai.LyricsTranslationUiState
 import com.example.ai.TranslationEngine
 import com.example.data.local.PlaybackPreferencesStore
 import com.example.data.local.SonoraDatabase
+import com.example.data.repository.AppUpdateChecker
+import com.example.data.repository.AppUpdateInfo
 import com.example.data.repository.DeviceMusicScanner
 import com.example.data.repository.MusicRepository
 import com.example.data.repository.OnlineLyricsCandidate
+import com.example.data.repository.UpdateCheckResult
+import com.example.playback.AppUpdateNotifier
 import com.example.model.AlbumGroup
 import com.example.model.ArtistGroup
 import com.example.model.AudioFormat
@@ -80,6 +85,15 @@ data class SonoraUiState(
     val snackbarMessage: String? = null
 )
 
+data class AppUpdateUiState(
+    val autoCheckEnabled: Boolean = false,
+    val githubRepoUrl: String = AppUpdateChecker.DEFAULT_GITHUB_REPO_URL,
+    val isChecking: Boolean = false,
+    val availableUpdate: AppUpdateInfo? = null,
+    val lastStatusMessage: String? = null,
+    val promptConfigureRepo: Boolean = false
+)
+
 class SonoraViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = SonoraDatabase.getInstance(application)
@@ -122,6 +136,16 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _customEqProfiles = MutableStateFlow(preferencesStore.loadCustomEqProfiles())
     val customEqProfiles: StateFlow<List<HeadphoneEqProfile>> = _customEqProfiles.asStateFlow()
+
+    private val updateChecker = AppUpdateChecker()
+    private val _updateUiState = MutableStateFlow(
+        AppUpdateUiState(
+            autoCheckEnabled = preferencesStore.isAutoUpdateCheckEnabled(),
+            githubRepoUrl = preferencesStore.loadGithubRepoUrl(AppUpdateChecker.DEFAULT_GITHUB_REPO_URL)
+                .ifBlank { AppUpdateChecker.DEFAULT_GITHUB_REPO_URL }
+        )
+    )
+    val updateUiState: StateFlow<AppUpdateUiState> = _updateUiState.asStateFlow()
 
     private val lyricsTranslationCoordinator = LyricsTranslationCoordinator(
         scope = viewModelScope,
@@ -461,9 +485,11 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     init {
         playbackController.connect()
         refreshLibrary()
+        maybeRunPeriodicUpdateCheck()
     }
 
     override fun onCleared() {
+        lyricsTranslationCoordinator.reset()
         playbackController.release()
         super.onCleared()
     }
@@ -952,6 +978,118 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     suspend fun loadTrackMetadata(track: AudioTrack): AudioTrackMetadata {
         return repository.extractTrackMetadata(track)
+    }
+
+    // Optional GitHub update checker
+    fun setAutoUpdateCheckEnabled(enabled: Boolean) {
+        preferencesStore.setAutoUpdateCheckEnabled(enabled)
+        _updateUiState.value = _updateUiState.value.copy(autoCheckEnabled = enabled)
+        if (enabled && _updateUiState.value.githubRepoUrl.isNotBlank()) {
+            maybeRunPeriodicUpdateCheck(forceImmediate = true)
+        }
+    }
+
+    fun requestConfigureGithubRepo() {
+        _updateUiState.value = _updateUiState.value.copy(promptConfigureRepo = true)
+    }
+
+    fun dismissConfigureGithubRepo() {
+        _updateUiState.value = _updateUiState.value.copy(promptConfigureRepo = false)
+    }
+
+    fun dismissAvailableUpdate() {
+        _updateUiState.value = _updateUiState.value.copy(availableUpdate = null)
+    }
+
+    fun saveGithubRepoAndCheck(rawUrl: String, checkNow: Boolean = true) {
+        val normalized = AppUpdateChecker.normalizeRepoUrl(rawUrl)
+        if (normalized.isEmpty()) {
+            snackbarFlow.value = "Ingresa un enlace válido de GitHub (ej. ${AppUpdateChecker.DEFAULT_GITHUB_REPO_URL})"
+            return
+        }
+        preferencesStore.saveGithubRepoUrl(normalized)
+        _updateUiState.value = _updateUiState.value.copy(
+            githubRepoUrl = normalized,
+            promptConfigureRepo = false
+        )
+        if (checkNow) {
+            checkForUpdates(manual = true)
+        }
+    }
+
+    fun checkForUpdates(manual: Boolean = true) {
+        val current = _updateUiState.value
+        if (current.isChecking) return
+        val repoUrl = AppUpdateChecker.normalizeRepoUrl(
+            current.githubRepoUrl.ifBlank { AppUpdateChecker.DEFAULT_GITHUB_REPO_URL }
+        )
+        if (repoUrl.isEmpty()) {
+            if (manual) {
+                _updateUiState.value = current.copy(promptConfigureRepo = true)
+            }
+            return
+        }
+
+        _updateUiState.value = current.copy(isChecking = true)
+        viewModelScope.launch {
+            val result = updateChecker.checkForUpdate(repoUrl, BuildConfig.VERSION_NAME)
+            preferencesStore.saveLastUpdateCheckTimestampMs(System.currentTimeMillis())
+            when (result) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    val info = result.info
+                    val lastNotified = preferencesStore.loadLastNotifiedUpdateVersion()
+                    if (manual || lastNotified != info.latestVersion) {
+                        AppUpdateNotifier.notifyUpdateAvailable(getApplication(), info)
+                        preferencesStore.saveLastNotifiedUpdateVersion(info.latestVersion)
+                    }
+                    _updateUiState.value = _updateUiState.value.copy(
+                        isChecking = false,
+                        availableUpdate = info,
+                        lastStatusMessage = "Nueva versión v${info.latestVersion} disponible"
+                    )
+                }
+                is UpdateCheckResult.UpToDate -> {
+                    val msg = "Tienes la última versión (v${result.currentVersion})"
+                    _updateUiState.value = _updateUiState.value.copy(
+                        isChecking = false,
+                        availableUpdate = null,
+                        lastStatusMessage = msg
+                    )
+                    if (manual) {
+                        snackbarFlow.value = msg
+                    }
+                }
+                UpdateCheckResult.RepoNotConfigured -> {
+                    _updateUiState.value = _updateUiState.value.copy(
+                        isChecking = false,
+                        promptConfigureRepo = manual
+                    )
+                }
+                is UpdateCheckResult.Error -> {
+                    _updateUiState.value = _updateUiState.value.copy(
+                        isChecking = false,
+                        lastStatusMessage = result.message
+                    )
+                    if (manual) {
+                        snackbarFlow.value = result.message
+                    }
+                }
+            }
+        }
+    }
+
+    private fun maybeRunPeriodicUpdateCheck(forceImmediate: Boolean = false) {
+        val state = _updateUiState.value
+        if (!state.autoCheckEnabled) return
+        val repoUrl = AppUpdateChecker.normalizeRepoUrl(
+            state.githubRepoUrl.ifBlank { AppUpdateChecker.DEFAULT_GITHUB_REPO_URL }
+        )
+        if (repoUrl.isEmpty()) return
+        val lastCheck = preferencesStore.loadLastUpdateCheckTimestampMs()
+        val elapsed = System.currentTimeMillis() - lastCheck
+        if (forceImmediate || elapsed >= AppUpdateChecker.PERIODIC_INTERVAL_MS) {
+            checkForUpdates(manual = false)
+        }
     }
 
     fun hasNotificationPermission(): Boolean {

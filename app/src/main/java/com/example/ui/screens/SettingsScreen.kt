@@ -19,7 +19,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Bedtime
-import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.FolderOpen
@@ -29,6 +28,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SdCard
 import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -76,7 +76,14 @@ fun SettingsScreen(
     onSelectTranslationEngine: (TranslationEngine) -> Unit,
     onOpenAboutAndLegal: () -> Unit,
     bottomContentPadding: PaddingValues,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    autoCheckUpdatesEnabled: Boolean = false,
+    isCheckingUpdates: Boolean = false,
+    updateStatusSubtitle: String? = null,
+    githubRepoConfigured: Boolean = false,
+    onCheckUpdatesNow: () -> Unit = {},
+    onToggleAutoCheckUpdates: (Boolean) -> Unit = {},
+    onConfigureGithubRepo: () -> Unit = {}
 ) {
     Column(
         modifier = modifier
@@ -333,25 +340,63 @@ fun SettingsScreen(
                 }
             }
 
-            // 5. Créditos, Código Abierto y Legal
+            // 5. Créditos, Actualizaciones y Soporte
             item(key = "section_about") {
                 SettingsSectionCard(title = "Créditos, código abierto y soporte") {
+                    SettingsActionRow(
+                        icon = Icons.Rounded.SystemUpdate,
+                        iconTint = LosslessCyan,
+                        title = "Comprobar actualizaciones",
+                        subtitle = when {
+                            isCheckingUpdates -> "Consultando GitHub…"
+                            !updateStatusSubtitle.isNullOrBlank() -> updateStatusSubtitle
+                            githubRepoConfigured -> "Buscar nuevas versiones en GitHub (Davoo-Player)"
+                            else -> "Toca para comprobar o vincular tu repositorio de GitHub"
+                        },
+                        onClick = onCheckUpdatesNow,
+                        testTag = "settings_check_updates_row",
+                        trailing = {
+                            if (isCheckingUpdates) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Rounded.Refresh,
+                        iconTint = if (autoCheckUpdatesEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                        title = "Aviso automático de actualizaciones",
+                        subtitle = if (githubRepoConfigured) {
+                            "Comprobación ligera diaria al abrir (Davoo-Player)"
+                        } else {
+                            "Opcional: activa avisos al vincular tu repositorio GitHub"
+                        },
+                        checked = autoCheckUpdatesEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && !githubRepoConfigured) {
+                                onConfigureGithubRepo()
+                            }
+                            onToggleAutoCheckUpdates(enabled)
+                        },
+                        testTag = "settings_auto_updates_switch"
+                    )
+                    SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.Info,
                         iconTint = CopperAmber,
                         title = "Acerca de Davoo Player",
-                        subtitle = "v${BuildConfig.VERSION_NAME} · DavooPunk · Registro de cambios y contacto",
+                        subtitle = "v${BuildConfig.VERSION_NAME} · DavooPunk · Licencias MIT, legal y cambios",
                         onClick = onOpenAboutAndLegal,
                         testTag = "settings_about_legal_row"
-                    )
-                    SettingsDivider()
-                    SettingsActionRow(
-                        icon = Icons.Rounded.Code,
-                        iconTint = LosslessCyan,
-                        title = "Código abierto (Licencia MIT) y legal",
-                        subtitle = "Privacidad, Términos, DMCA y licencias · davidmarin2704@gmail.com",
-                        onClick = onOpenAboutAndLegal,
-                        testTag = "settings_open_source_row"
                     )
                 }
             }

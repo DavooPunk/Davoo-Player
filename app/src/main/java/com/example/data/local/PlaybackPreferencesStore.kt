@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import com.example.BuildConfig
+import com.example.ai.DeepLLyricsTranslator
 import com.example.ai.TranslationEngine
 import com.example.model.AudioSettings
 import com.example.model.EqPreset
@@ -232,14 +234,54 @@ class PlaybackPreferencesStore(context: Context) {
         return updated
     }
 
-    fun loadTranslationEngine(): TranslationEngine {
+    fun loadTranslationEngine(apiKey: String = BuildConfig.DEEPL_API_KEY): TranslationEngine {
         val raw = prefs.getString(KEY_TRANSLATION_ENGINE, null)
-        return TranslationEngine.fromName(raw)
+        return if (raw != null) {
+            TranslationEngine.fromName(raw)
+        } else if (DeepLLyricsTranslator.isValidApiKey(apiKey)) {
+            TranslationEngine.DEEPL
+        } else {
+            TranslationEngine.GOOGLE
+        }
     }
 
     fun saveTranslationEngine(engine: TranslationEngine) {
         runCatching {
             prefs.edit().putString(KEY_TRANSLATION_ENGINE, engine.name).apply()
+        }
+    }
+
+    fun isAutoUpdateCheckEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_UPDATE_CHECK, false)
+
+    fun setAutoUpdateCheckEnabled(enabled: Boolean) {
+        runCatching {
+            prefs.edit().putBoolean(KEY_AUTO_UPDATE_CHECK, enabled).apply()
+        }
+    }
+
+    fun loadGithubRepoUrl(defaultUrl: String = ""): String {
+        return prefs.getString(KEY_GITHUB_REPO_URL, defaultUrl)?.trim().orEmpty()
+    }
+
+    fun saveGithubRepoUrl(url: String) {
+        runCatching {
+            prefs.edit().putString(KEY_GITHUB_REPO_URL, url.trim()).apply()
+        }
+    }
+
+    fun loadLastUpdateCheckTimestampMs(): Long = prefs.getLong(KEY_LAST_UPDATE_CHECK_MS, 0L)
+
+    fun saveLastUpdateCheckTimestampMs(timestampMs: Long) {
+        runCatching {
+            prefs.edit().putLong(KEY_LAST_UPDATE_CHECK_MS, timestampMs).apply()
+        }
+    }
+
+    fun loadLastNotifiedUpdateVersion(): String? = prefs.getString(KEY_LAST_NOTIFIED_VERSION, null)
+
+    fun saveLastNotifiedUpdateVersion(version: String) {
+        runCatching {
+            prefs.edit().putString(KEY_LAST_NOTIFIED_VERSION, version).apply()
         }
     }
 
@@ -250,5 +292,9 @@ class PlaybackPreferencesStore(context: Context) {
         private const val KEY_SAVED_SESSION = "saved_playback_session_json"
         private const val KEY_SD_TREE_FOLDERS = "sd_tree_folders_json"
         private const val KEY_TRANSLATION_ENGINE = "preferred_translation_engine"
+        private const val KEY_AUTO_UPDATE_CHECK = "auto_update_check_enabled"
+        private const val KEY_GITHUB_REPO_URL = "github_repo_url"
+        private const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
+        private const val KEY_LAST_NOTIFIED_VERSION = "last_notified_update_version"
     }
 }

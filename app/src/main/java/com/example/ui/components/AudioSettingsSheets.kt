@@ -493,6 +493,7 @@ fun EqualizerAndDspSheet(
 
             // Classic preset selector
             LazyRow(
+                modifier = Modifier.testTag("eq_preset_row"),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
