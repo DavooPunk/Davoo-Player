@@ -11,6 +11,7 @@ import com.example.ai.TranslationEngine
 import com.example.model.AudioSettings
 import com.example.model.EqPreset
 import com.example.model.HeadphoneEqProfile
+import com.example.model.LastFmSession
 import com.example.model.SdCardFolder
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -285,6 +286,62 @@ class PlaybackPreferencesStore(context: Context) {
         }
     }
 
+    fun saveLastFmSession(session: LastFmSession) {
+        runCatching {
+            prefs.edit()
+                .putString(KEY_LFM_SESSION_KEY, session.sessionKey.trim())
+                .putString(KEY_LFM_USERNAME, session.username.trim())
+                .putString(KEY_LFM_AVATAR_URL, session.avatarUrl.orEmpty().trim())
+                .apply()
+        }
+    }
+
+    fun loadLastFmSession(): LastFmSession? {
+        val key = prefs.getString(KEY_LFM_SESSION_KEY, null)?.trim().orEmpty()
+        val username = prefs.getString(KEY_LFM_USERNAME, null)?.trim().orEmpty()
+        if (key.isEmpty() || username.isEmpty()) return null
+        val avatar = prefs.getString(KEY_LFM_AVATAR_URL, null)?.trim()?.takeIf { it.isNotEmpty() }
+        return LastFmSession(sessionKey = key, username = username, avatarUrl = avatar)
+    }
+
+    fun updateLastFmAvatar(avatarUrl: String?) {
+        runCatching {
+            prefs.edit().putString(KEY_LFM_AVATAR_URL, avatarUrl.orEmpty().trim()).apply()
+        }
+    }
+
+    fun clearLastFmSession() {
+        runCatching {
+            prefs.edit()
+                .remove(KEY_LFM_SESSION_KEY)
+                .remove(KEY_LFM_USERNAME)
+                .remove(KEY_LFM_AVATAR_URL)
+                .apply()
+        }
+    }
+
+    fun saveLastFmCredentialsOverride(apiKey: String, sharedSecret: String) {
+        runCatching {
+            prefs.edit()
+                .putString(KEY_LFM_API_KEY, apiKey.trim())
+                .putString(KEY_LFM_SHARED_SECRET, sharedSecret.trim())
+                .apply()
+        }
+    }
+
+    fun clearLastFmCredentialsOverride() {
+        runCatching {
+            prefs.edit()
+                .remove(KEY_LFM_API_KEY)
+                .remove(KEY_LFM_SHARED_SECRET)
+                .apply()
+        }
+    }
+
+    fun loadLastFmApiKeyOverride(): String = prefs.getString(KEY_LFM_API_KEY, null)?.trim().orEmpty()
+
+    fun loadLastFmSharedSecretOverride(): String = prefs.getString(KEY_LFM_SHARED_SECRET, null)?.trim().orEmpty()
+
     companion object {
         private const val PREFS_NAME = "sonora_audio_prefs"
         private const val KEY_AUDIO_SETTINGS = "audio_settings_json"
@@ -296,5 +353,10 @@ class PlaybackPreferencesStore(context: Context) {
         private const val KEY_GITHUB_REPO_URL = "github_repo_url"
         private const val KEY_LAST_UPDATE_CHECK_MS = "last_update_check_ms"
         private const val KEY_LAST_NOTIFIED_VERSION = "last_notified_update_version"
+        private const val KEY_LFM_SESSION_KEY = "lfm_session_key"
+        private const val KEY_LFM_USERNAME = "lfm_username"
+        private const val KEY_LFM_AVATAR_URL = "lfm_avatar_url"
+        private const val KEY_LFM_API_KEY = "lfm_api_key_override"
+        private const val KEY_LFM_SHARED_SECRET = "lfm_shared_secret_override"
     }
 }

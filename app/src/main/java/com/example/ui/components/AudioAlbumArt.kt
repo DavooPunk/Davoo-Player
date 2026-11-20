@@ -271,9 +271,56 @@ object AudioArtImageLoaderProvider {
     }
 }
 
+object RemoteArtImageLoaderProvider {
+    @Volatile
+    private var instance: ImageLoader? = null
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun get(context: Context): ImageLoader {
+        return instance ?: synchronized(this) {
+            val appContext = context.applicationContext
+            val okHttp = okhttp3.OkHttpClient.Builder()
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .addInterceptor { chain ->
+                    val req = chain.request().newBuilder()
+                        .header("User-Agent", "DavooPlayer/${com.example.BuildConfig.VERSION_NAME}")
+                        .build()
+                    chain.proceed(req)
+                }
+                .build()
+            instance ?: ImageLoader.Builder(appContext)
+                .okHttpClient(okHttp)
+                .memoryCache {
+                    coil.memory.MemoryCache.Builder(appContext)
+                        .maxSizePercent(0.08)
+                        .build()
+                }
+                .fetcherDispatcher(Dispatchers.IO.limitedParallelism(3))
+                .decoderDispatcher(Dispatchers.IO.limitedParallelism(2))
+                .diskCache(null)
+                .diskCachePolicy(coil.request.CachePolicy.DISABLED)
+                .networkCachePolicy(coil.request.CachePolicy.ENABLED)
+                .crossfade(true)
+                .build()
+                .also { instance = it }
+        }
+    }
+
+    fun trimMemory(level: Int) {
+        val cache = instance?.memoryCache ?: return
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            cache.clear()
+        } else {
+            cache.trimMemory(level)
+        }
+    }
+}
+
 /**
  * Uses Coil with [EmbeddedAudioArtFetcher] to extract, downsample, cache, and display
- * the embedded album art thumbnail for an audio file, falling back to the default artwork.
+ * the embedded album art thumbnail for an audio file, or [RemoteArtImageLoaderProvider]
+ * when displaying a remote Deezer/Last.fm HTTPS cover URL.
  */
 @Composable
 fun AudioAlbumArtThumbnail(
@@ -286,12 +333,27 @@ fun AudioAlbumArtThumbnail(
     crossfade: Boolean = false
 ) {
     val context = LocalContext.current
-    val imageLoader = remember(context) { AudioArtImageLoaderProvider.get(context) }
-    val request = remember(audioUri, albumArtUri, thumbnailSizePx, crossfade, context) {
+    val remoteArtworkUrl = albumArtUri?.takeIf {
+        it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
+    }
+    val useRemoteLoader = remoteArtworkUrl != null &&
+        (audioUri.isBlank() || audioUri.startsWith("http://", ignoreCase = true) || audioUri.startsWith("https://", ignoreCase = true))
+
+    val imageLoader = remember(context, useRemoteLoader) {
+        if (useRemoteLoader) RemoteArtImageLoaderProvider.get(context)
+        else AudioArtImageLoaderProvider.get(context)
+    }
+    val request = remember(audioUri, albumArtUri, thumbnailSizePx, crossfade, context, useRemoteLoader) {
         ImageRequest.Builder(context)
-            .data(EmbeddedAudioArtRequest(audioUri = audioUri, fallbackAlbumArtUri = albumArtUri))
+            .data(
+                if (useRemoteLoader) {
+                    remoteArtworkUrl
+                } else {
+                    EmbeddedAudioArtRequest(audioUri = audioUri, fallbackAlbumArtUri = albumArtUri)
+                }
+            )
             .size(thumbnailSizePx)
-            .crossfade(crossfade)
+            .crossfade(crossfade || useRemoteLoader)
             .build()
     }
 

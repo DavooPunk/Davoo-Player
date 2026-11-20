@@ -4,7 +4,25 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.2 (Actual — Compilación 7)
+## v2.0.3 (Actual — Compilación 8)
+
+### Integración con Last.fm y Scrobbling en Vivo
+- **Autenticación OAuth nativa**: botón *"Conectar con Last.fm"* en *Opciones* y en la nueva pestaña *Last.fm*, con apertura en navegador externo, callback `davooplayer://lastfm-callback`, firma MD5 nativa (`MessageDigest`) sin librerías externas y persistencia segura de sesión (`lfm_session_key`, `lfm_username`).
+- **Configuración flexible de credenciales**: soporte para constantes/Secrets (`LASTFM_API_KEY`, `LASTFM_SHARED_SECRET`) y diálogo modal editable dentro de la app.
+- **Scrobbling automático en tiempo real**: envía `track.updateNowPlaying` al comenzar una pista y ejecuta `track.scrobble` una única vez al superar el 50% de duración (o 15 segundos en previews) con indicador discreto `"Scrobble enviado"`.
+- **Sincronización de Favoritas (`track.love` / `track.unlove`)**: el botón de corazón en el reproductor y en el perfil Last.fm sincroniza tus gustos al instante.
+
+### Perfil Last.fm y Enriquecimiento con Deezer
+- **Nueva pestaña *Last.fm***: muestra **Top Canciones** (con filtros `7 días`, `1 mes`, `12 meses` y `Siempre`), **Favoritas** e **Historial Reciente** destacando las pistas en reproducción actual (`@attr.nowplaying`).
+- **API pública de Deezer (`buscarEnDeezer`)**: obtiene carátulas en alta resolución (`cover_xl`) y permite escuchar el fragmento de audio (`preview` MP3 de 30s) directamente en Davoo Player con caché LRU limitada en memoria y control de concurrencia para ahorrar batería y datos.
+
+### Correcciones Críticas y Rendimiento (Buscador Global)
+- **Escritura fluida y cursor estable con Gboard**: desacoplamiento total entre el estado síncrono local del `OutlinedTextField` (`localQuery`) y el `StateFlow` del `ViewModel`, eliminando saltos de cursor, inversión de caracteres y conflictos con el autocompletado al escribir rápido.
+- **Filtrado asíncrono con debounce (`150 ms`)**: el filtrado de bibliotecas extensas (más de 5,400 pistas, álbumes, artistas y listas) ahora se ejecuta en `Dispatchers.Default` mediante `collectLatest` y sin asignaciones innecesarias de cadenas, cancelando búsquedas intermedias para no bloquear el hilo principal.
+
+---
+
+## v2.0.2 (Compilación 7)
 
 ### Hub Principal y Ecualizador
 - **Cabecera principal mejorada**: intercambio de los botones circulares superiores en *Tu Música* para ubicar la lupa de búsqueda a la izquierda y la tuerca de *Opciones* en el extremo derecho.

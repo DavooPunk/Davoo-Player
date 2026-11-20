@@ -139,8 +139,20 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.2",
+        version = "v2.0.3",
         tag = "Actual",
+        items = listOf(
+            "Integración completa con Last.fm: flujo OAuth seguro con callback davooplayer://lastfm-callback, firma MD5 nativa (api_sig) y gestión de API Key / Shared Secret en Opciones o Perfil.",
+            "Nueva pestaña Perfil Last.fm con Top Canciones (7 días, 1 mes, 12 meses y siempre), Favoritas y Historial Reciente destacando la pista en reproducción actual.",
+            "Enriquecimiento con API pública de Deezer: carga carátulas en alta resolución (cover_xl) y reproduce vistas previas de 30 segundos directamente en Davoo Player con caché LRU y control de concurrencia.",
+            "Scrobbling en vivo automático: envía updateNowPlaying al iniciar, registra track.scrobble al superar el 50% (o 15s en previews) con aviso discreto y sincroniza Favoritas (track.love / track.unlove).",
+            "Protección de memoria y batería: consultas diferidas durante el scroll y liberación automática de caché remota ante avisos de baja memoria.",
+            "Corrección crítica en el buscador global: estado local síncrono en el campo de texto para evitar saltos de cursor o inversión de letras con Gboard, y filtrado asíncrono en segundo plano (Dispatchers.Default) con debounce de 150 ms y collectLatest para bibliotecas de miles de canciones."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.2",
+        tag = "Anterior",
         items = listOf(
             "Intercambio de botones en Tu Música: botón de búsqueda (lupa) a la izquierda y botón de Opciones (tuerca) en el extremo derecho de la cabecera.",
             "Nuevo preset Hip-Hop en el ecualizador de 10 bandas con realce calibrado en subgraves/bajos (31–125 Hz) y Preamp compensado (-4.8 dB) anti-saturación.",

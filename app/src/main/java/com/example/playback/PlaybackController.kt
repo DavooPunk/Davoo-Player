@@ -13,6 +13,8 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.example.data.local.PlaybackPreferencesStore
+import com.example.data.repository.LastFmRepository
+import com.example.data.repository.LastFmScrobblePolicy
 import com.example.data.repository.MusicRepository
 import com.example.model.AudioFormat
 import com.example.model.AudioSettings
@@ -50,7 +52,8 @@ data class PlaybackUiState(
 class PlaybackController(
     private val context: Context,
     private val repository: MusicRepository,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val lastFmRepository: LastFmRepository? = null
 ) {
     private val prefsStore = PlaybackPreferencesStore(context)
     private val bandHelper = AudioEffectsController()
@@ -68,10 +71,19 @@ class PlaybackController(
     private var techSpecJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var settingsSyncJob: Job? = null
+    private var scrobbleDismissJob: Job? = null
     @Volatile
     private var trackLookup: Map<String, AudioTrack> = emptyMap()
     private var lastRecordedTrackId: String? = null
     private var restoredSessionAttempted: Boolean = false
+
+    private var currentScrobbleTrackId: String? = null
+    private var currentScrobbleStartEpochSec: Long = 0L
+    private var nowPlayingReportedForSession: Boolean = false
+    private var scrobbledCurrentSession: Boolean = false
+
+    private val _scrobbleNotice = MutableStateFlow<String?>(null)
+    val scrobbleNotice: StateFlow<String?> = _scrobbleNotice.asStateFlow()
 
     private val _playerFlow = MutableStateFlow<Player?>(null)
     val playerFlow: StateFlow<Player?> = _playerFlow.asStateFlow()
@@ -115,6 +127,11 @@ class PlaybackController(
                 _stopAfterCurrentTrack.value = false
                 mediaController?.pause()
             }
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK
+            ) {
+                resetCurrentScrobbleSession()
+            }
             mediaController?.let { syncFromPlayer(it) }
         }
 
@@ -129,6 +146,7 @@ class PlaybackController(
             if (isPlaying) {
                 startPositionTicker()
                 recordCurrentTrackPlayIfNeeded()
+                _uiState.value.currentTrack?.let { reportLastFmNowPlayingIfNeeded(it) }
             } else {
                 stopPositionTicker()
             }
@@ -177,6 +195,7 @@ class PlaybackController(
         stopPositionTicker()
         sleepTimerJob?.cancel()
         techSpecJob?.cancel()
+        scrobbleDismissJob?.cancel()
         if (settingsSyncJob?.isActive == true) {
             settingsSyncJob?.cancel()
             prefsStore.saveAudioSettings(_audioSettings.value)
@@ -189,6 +208,11 @@ class PlaybackController(
         bandHelper.release()
         trackLookup = emptyMap()
         _playerFlow.value = null
+    }
+
+    fun clearScrobbleNotice() {
+        scrobbleDismissJob?.cancel()
+        _scrobbleNotice.value = null
     }
 
     fun clearError() {
@@ -258,6 +282,7 @@ class PlaybackController(
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         trackLookup = tracks.associateBy { it.id }
         lastRecordedTrackId = null
+        resetCurrentScrobbleSession()
 
         val controller = mediaController
         if (controller == null) {
@@ -507,13 +532,83 @@ class PlaybackController(
         }
 
         if (currentTrack != null && currentTrack.id != previousTrackId) {
+            resetCurrentScrobbleSession()
             loadTrackMetadataAndSpecs(currentTrack)
             if (player.isPlaying) {
                 recordCurrentTrackPlayIfNeeded()
+                reportLastFmNowPlayingIfNeeded(currentTrack)
             }
         } else if (currentTrack == null) {
+            resetCurrentScrobbleSession()
             techSpecJob?.cancel()
             _uiState.update { it.copy(techSpecs = null, metadata = null) }
+        }
+    }
+
+    private fun resetCurrentScrobbleSession() {
+        currentScrobbleTrackId = null
+        currentScrobbleStartEpochSec = 0L
+        nowPlayingReportedForSession = false
+        scrobbledCurrentSession = false
+    }
+
+    private fun reportLastFmNowPlayingIfNeeded(track: AudioTrack) {
+        if (currentScrobbleTrackId != track.id) {
+            currentScrobbleTrackId = track.id
+            currentScrobbleStartEpochSec = System.currentTimeMillis() / 1000L
+            nowPlayingReportedForSession = false
+            scrobbledCurrentSession = false
+        }
+        if (nowPlayingReportedForSession) return
+        val lfm = lastFmRepository ?: return
+        if (!lfm.hasActiveSession()) return
+        nowPlayingReportedForSession = true
+        scope.launch(Dispatchers.IO) {
+            lfm.updateNowPlaying(
+                artist = track.artist,
+                track = track.title,
+                album = track.album,
+                durationMs = track.durationMs
+            )
+        }
+    }
+
+    private fun maybeSendLastFmScrobble(track: AudioTrack, positionMs: Long, durationMs: Long) {
+        val lfm = lastFmRepository ?: return
+        if (!lfm.hasActiveSession()) return
+        if (currentScrobbleTrackId != track.id) {
+            currentScrobbleTrackId = track.id
+            currentScrobbleStartEpochSec = System.currentTimeMillis() / 1000L
+            nowPlayingReportedForSession = false
+            scrobbledCurrentSession = false
+        }
+        if (!LastFmScrobblePolicy.shouldScrobble(
+                trackId = track.id,
+                positionMs = positionMs,
+                durationMs = durationMs,
+                alreadyScrobbled = scrobbledCurrentSession
+            )
+        ) {
+            return
+        }
+        scrobbledCurrentSession = true
+        val startTimestamp = currentScrobbleStartEpochSec.takeIf { it > 0L }
+            ?: (System.currentTimeMillis() / 1000L)
+        scope.launch(Dispatchers.IO) {
+            lfm.scrobbleTrack(
+                artist = track.artist,
+                track = track.title,
+                timestampSec = startTimestamp,
+                album = track.album,
+                durationMs = durationMs
+            ).onSuccess {
+                _scrobbleNotice.value = "Scrobble enviado"
+                scrobbleDismissJob?.cancel()
+                scrobbleDismissJob = scope.launch {
+                    delay(4_000L)
+                    _scrobbleNotice.value = null
+                }
+            }
         }
     }
 
@@ -545,9 +640,13 @@ class PlaybackController(
                 val controller = mediaController ?: break
                 if (!controller.isPlaying) break
                 val pos = controller.currentPosition.coerceAtLeast(0L)
+                val currentTrack = _uiState.value.currentTrack
                 val dur = controller.duration.takeIf { it > 0 }
-                    ?: (_uiState.value.currentTrack?.durationMs ?: 0L)
+                    ?: (currentTrack?.durationMs ?: 0L)
                 _uiState.update { it.copy(positionMs = pos, durationMs = dur) }
+                if (currentTrack != null && dur > 0L) {
+                    maybeSendLastFmScrobble(currentTrack, pos, dur)
+                }
                 delay(350L)
             }
         }

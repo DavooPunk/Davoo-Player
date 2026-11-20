@@ -1,6 +1,9 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -122,7 +125,8 @@ fun NowPlayingScreen(
     onShowLyrics: (AudioTrack) -> Unit = {},
     onEditTags: (AudioTrack) -> Unit = {},
     modifier: Modifier = Modifier,
-    onShowMetadata: (AudioTrack) -> Unit = {}
+    onShowMetadata: (AudioTrack) -> Unit = {},
+    scrobbleStatusNotice: String? = null
 ) {
     val context = LocalContext.current
     val track = playbackState.currentTrack
@@ -314,6 +318,28 @@ fun NowPlayingScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = !scrobbleStatusNotice.isNullOrBlank(),
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(100.dp),
+                    color = LosslessCyanContainer,
+                    border = BorderStroke(1.dp, LosslessCyan.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .padding(top = 8.dp)
+                        .testTag("now_playing_scrobble_badge")
+                ) {
+                    Text(
+                        text = scrobbleStatusNotice.orEmpty(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LosslessCyan,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }

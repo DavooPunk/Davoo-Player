@@ -7,11 +7,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.util.Consumer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -47,9 +50,11 @@ import androidx.compose.material.icons.automirrored.outlined.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.outlined.Album
 import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
@@ -81,6 +86,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -89,9 +97,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -129,6 +139,7 @@ import com.example.ui.components.TrackRow
 import com.example.ui.components.formatDuration
 import com.example.ui.screens.AlbumDetailScreen
 import com.example.ui.screens.AlbumsScreen
+import com.example.ui.screens.LastFmProfileScreen
 import com.example.ui.screens.LibraryScreen
 import com.example.ui.screens.NowPlayingScreen
 import com.example.ui.screens.PlaylistDetailScreen
@@ -154,6 +165,9 @@ sealed interface Route {
 
     @Serializable
     data object Playlists : Route
+
+    @Serializable
+    data object LastFm : Route
 
     @Serializable
     data class AlbumDetail(val albumName: String) : Route
@@ -200,6 +214,13 @@ private val topDestinations = listOf(
         selectedIcon = Icons.AutoMirrored.Rounded.QueueMusic,
         unselectedIcon = Icons.AutoMirrored.Outlined.QueueMusic,
         testTag = "nav_playlists"
+    ),
+    TopDestination(
+        route = Route.LastFm,
+        labelRes = R.string.nav_lastfm,
+        selectedIcon = Icons.Rounded.Person,
+        unselectedIcon = Icons.Outlined.Person,
+        testTag = "nav_lastfm"
     )
 )
 
@@ -219,6 +240,8 @@ fun SonoraApp(
     val lyricsTranslationState by viewModel.lyricsTranslationState.collectAsStateWithLifecycle()
     val preferredTranslationEngine by viewModel.preferredTranslationEngine.collectAsStateWithLifecycle()
     val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
+    val lastFmUiState by viewModel.lastFmUiState.collectAsStateWithLifecycle()
+    val scrobbleNotice by viewModel.scrobbleNotice.collectAsStateWithLifecycle()
     var requestedArtistDrilldown by remember { mutableStateOf<String?>(null) }
 
     val navController = rememberNavController()
@@ -518,13 +541,51 @@ fun SonoraApp(
         }
     }
 
+    // Last.fm OAuth browser launch + callback deep-link handling (davooplayer://lastfm-callback)
+    val componentActivity = context as? ComponentActivity
+    LaunchedEffect(componentActivity) {
+        viewModel.handleLastFmCallbackUri(componentActivity?.intent?.data)
+    }
+    DisposableEffect(componentActivity) {
+        val listener = Consumer<Intent> { intent ->
+            viewModel.handleLastFmCallbackUri(intent.data)
+        }
+        componentActivity?.addOnNewIntentListener(listener)
+        onDispose {
+            componentActivity?.removeOnNewIntentListener(listener)
+        }
+    }
+    LaunchedEffect(lastFmUiState.pendingAuthUrl) {
+        val url = lastFmUiState.pendingAuthUrl ?: return@LaunchedEffect
+        viewModel.consumePendingLastFmAuthUrl()
+        val opened = runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            )
+        }.isSuccess
+        if (!opened) {
+            snackbarHostState.showSnackbar("No se encontró un navegador para autenticar con Last.fm")
+        }
+    }
+
+    // Discreet native notice when live scrobble is submitted
+    LaunchedEffect(scrobbleNotice) {
+        val notice = scrobbleNotice
+        if (!notice.isNullOrBlank()) {
+            Toast.makeText(context, notice, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
     val isNowPlaying = currentDestination?.hasRoute<Route.NowPlaying>() == true
     val isSettings = currentDestination?.hasRoute<Route.Settings>() == true
     val isMainTab = currentDestination?.hasRoute<Route.Library>() == true ||
         currentDestination?.hasRoute<Route.Albums>() == true ||
-        currentDestination?.hasRoute<Route.Playlists>() == true
+        currentDestination?.hasRoute<Route.Playlists>() == true ||
+        currentDestination?.hasRoute<Route.LastFm>() == true
 
     BackHandler(enabled = uiState.isGlobalSearchOpen && isMainTab) {
         viewModel.closeGlobalSearch()
@@ -548,6 +609,7 @@ fun SonoraApp(
                             Route.Playlists -> currentDestination?.hasRoute<Route.Playlists>() == true ||
                                 currentDestination?.hasRoute<Route.PlaylistDetail>() == true ||
                                 currentDestination?.hasRoute<Route.SmartPlaylistDetail>() == true
+                            Route.LastFm -> currentDestination?.hasRoute<Route.LastFm>() == true
                             else -> false
                         }
                         NavigationRailItem(
@@ -635,6 +697,7 @@ fun SonoraApp(
                                             Route.Playlists -> currentDestination?.hasRoute<Route.Playlists>() == true ||
                                                 currentDestination?.hasRoute<Route.PlaylistDetail>() == true ||
                                                 currentDestination?.hasRoute<Route.SmartPlaylistDetail>() == true
+                                            Route.LastFm -> currentDestination?.hasRoute<Route.LastFm>() == true
                                             else -> false
                                         }
                                         NavigationBarItem(
@@ -761,7 +824,25 @@ fun SonoraApp(
                                     }
                                     viewModel.setAutoUpdateCheckEnabled(enabled)
                                 },
-                                onConfigureGithubRepo = viewModel::requestConfigureGithubRepo
+                                onConfigureGithubRepo = viewModel::requestConfigureGithubRepo,
+                                lastFmUsername = lastFmUiState.session?.username,
+                                lastFmHasCredentials = lastFmUiState.hasCredentials,
+                                onOpenLastFmProfileOrConnect = {
+                                    if (lastFmUiState.session != null) {
+                                        navController.navigate(Route.LastFm) {
+                                            popUpTo(navController.graph.findStartDestination().id) {
+                                                saveState = true
+                                            }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
+                                    } else {
+                                        viewModel.startLastFmOAuthLogin()
+                                    }
+                                },
+                                onConfigureLastFmCredentials = {
+                                    viewModel.openLastFmCredentialsDialog(connectAfterSave = false)
+                                }
                             )
                         }
 
@@ -940,6 +1021,38 @@ fun SonoraApp(
                             )
                         }
 
+                        composable<Route.LastFm> {
+                            LaunchedEffect(lastFmUiState.session?.username) {
+                                viewModel.ensureLastFmProfileLoaded()
+                            }
+                            LastFmProfileScreen(
+                                uiState = lastFmUiState,
+                                currentTrackId = playbackState.currentTrack?.id,
+                                isPlaying = playbackState.isPlaying,
+                                bottomContentPadding = bottomContentPadding,
+                                onConnectClick = viewModel::startLastFmOAuthLogin,
+                                onOpenCredentialsDialog = {
+                                    viewModel.openLastFmCredentialsDialog(connectAfterSave = false)
+                                },
+                                onLogoutClick = viewModel::logoutLastFm,
+                                onRefreshClick = { viewModel.refreshLastFmProfile(forceAll = false) },
+                                onOpenSettings = {
+                                    viewModel.closeGlobalSearch()
+                                    navController.navigate(Route.Settings) {
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onSelectTab = viewModel::selectLastFmTab,
+                                onSelectPeriod = viewModel::selectLastFmPeriod,
+                                onEnsureDeezerEnrichment = viewModel::ensureDeezerEnrichment,
+                                onPlayPreview = { item ->
+                                    ensureNotificationPermissionForPlayback()
+                                    viewModel.playLastFmPreview(item)
+                                },
+                                onToggleLove = viewModel::toggleLastFmItemLove
+                            )
+                        }
+
                         composable<Route.NowPlaying> {
                             NowPlayingScreen(
                                 playbackState = playbackState,
@@ -965,7 +1078,8 @@ fun SonoraApp(
                                     pickedCustomCoverUri = null
                                     tagEditorTargetTrack = track
                                 },
-                                onShowMetadata = { track -> metadataTargetTrack = track }
+                                onShowMetadata = { track -> metadataTargetTrack = track },
+                                scrobbleStatusNotice = scrobbleNotice
                             )
                         }
                     }
@@ -983,7 +1097,7 @@ fun SonoraApp(
                             currentTrackId = playbackState.currentTrack?.id,
                             isPlaying = playbackState.isPlaying,
                             bottomContentPadding = bottomContentPadding,
-                            onQueryChange = viewModel::updateSearchQuery,
+                            onQueryChange = viewModel::onSearchQueryChange,
                             onClose = viewModel::closeGlobalSearch,
                             onPlayTrack = { tracks, index ->
                                 ensureNotificationPermissionForPlayback()
@@ -1352,6 +1466,65 @@ fun SonoraApp(
             modifier = Modifier.testTag("app_update_available_dialog")
         )
     }
+
+    // Last.fm API Credentials Modal Dialog (fallback / manual configuration)
+    if (lastFmUiState.showCredentialsDialog) {
+        var apiKeyDraft by remember(lastFmUiState.currentApiKey) {
+            mutableStateOf(lastFmUiState.currentApiKey)
+        }
+        var sharedSecretDraft by remember(lastFmUiState.currentSharedSecret) {
+            mutableStateOf(lastFmUiState.currentSharedSecret)
+        }
+        AlertDialog(
+            onDismissRequest = viewModel::dismissLastFmCredentialsDialog,
+            icon = {
+                Icon(Icons.Rounded.Key, contentDescription = null, tint = CopperAmber)
+            },
+            title = { Text("Credenciales API de Last.fm") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Ingresa tu API Key y Shared Secret de Last.fm (callback: davooplayer://lastfm-callback).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiKeyDraft,
+                        onValueChange = { apiKeyDraft = it },
+                        label = { Text("LASTFM_API_KEY") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("lastfm_api_key_input")
+                    )
+                    OutlinedTextField(
+                        value = sharedSecretDraft,
+                        onValueChange = { sharedSecretDraft = it },
+                        label = { Text("LASTFM_SHARED_SECRET") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("lastfm_shared_secret_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.saveLastFmCredentials(apiKeyDraft, sharedSecretDraft) },
+                    enabled = apiKeyDraft.isNotBlank() && sharedSecretDraft.isNotBlank(),
+                    modifier = Modifier.testTag("lastfm_save_credentials_button")
+                ) {
+                    Text("Guardar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissLastFmCredentialsDialog) {
+                    Text("Cancelar")
+                }
+            },
+            modifier = Modifier.testTag("lastfm_credentials_dialog")
+        )
+    }
 }
 
 @Composable
@@ -1375,8 +1548,15 @@ fun GlobalSearchOverlay(
     onOpenPlaylist: (Long) -> Unit
 ) {
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
+    val focusManager = LocalFocusManager.current
+    var localQuery by remember { mutableStateOf(uiState.searchQuery) }
+
+    LaunchedEffect(uiState.isGlobalSearchOpen) {
+        if (!uiState.isGlobalSearchOpen) {
+            localQuery = ""
+        } else {
+            runCatching { focusRequester.requestFocus() }
+        }
     }
 
     Surface(
@@ -1394,8 +1574,11 @@ fun GlobalSearchOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedTextField(
-                    value = uiState.searchQuery,
-                    onValueChange = onQueryChange,
+                    value = localQuery,
+                    onValueChange = { newValue ->
+                        localQuery = newValue
+                        onQueryChange(newValue)
+                    },
                     placeholder = {
                         Text(
                             text = "Buscar canciones, álbumes, artistas o listas…",
@@ -1408,9 +1591,12 @@ fun GlobalSearchOverlay(
                         Icon(Icons.Rounded.Search, contentDescription = null, tint = CopperAmber)
                     },
                     trailingIcon = {
-                        if (uiState.searchQuery.isNotEmpty()) {
+                        if (localQuery.isNotEmpty()) {
                             IconButton(
-                                onClick = { onQueryChange("") },
+                                onClick = {
+                                    localQuery = ""
+                                    onQueryChange("")
+                                },
                                 modifier = Modifier.testTag("global_search_clear_button")
                             ) {
                                 Icon(Icons.Rounded.Clear, contentDescription = "Limpiar búsqueda")
@@ -1418,6 +1604,10 @@ fun GlobalSearchOverlay(
                         }
                     },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = { focusManager.clearFocus() }
+                    ),
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -1452,7 +1642,9 @@ fun GlobalSearchOverlay(
                 }
             }
 
-            val trimmed = uiState.searchQuery.trim()
+            val trimmed = localQuery.trim()
+            val appliedTrimmed = uiState.searchQuery.trim()
+            val isDebouncePending = trimmed.isNotEmpty() && trimmed != appliedTrimmed
             val hasResults = uiState.globalMatchingTracks.isNotEmpty() ||
                 uiState.globalMatchingAlbums.isNotEmpty() ||
                 uiState.globalMatchingArtists.isNotEmpty() ||
@@ -1490,6 +1682,33 @@ fun GlobalSearchOverlay(
                                 Text(
                                     text = "Escribe para filtrar al instante entre ${uiState.allTracks.size} canciones, ${uiState.albums.size} álbumes, ${uiState.artists.size} artistas y ${uiState.playlists.size} listas.",
                                     style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else if (!hasResults && isDebouncePending) {
+                    item(key = "global_search_pending") {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("global_search_loading_state")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(20.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = CopperAmber
+                                )
+                                Text(
+                                    text = "Buscando «$trimmed»…",
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }

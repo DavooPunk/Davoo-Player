@@ -24,7 +24,9 @@ import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SdCard
 import androidx.compose.material.icons.rounded.Speed
@@ -83,7 +85,11 @@ fun SettingsScreen(
     githubRepoConfigured: Boolean = false,
     onCheckUpdatesNow: () -> Unit = {},
     onToggleAutoCheckUpdates: (Boolean) -> Unit = {},
-    onConfigureGithubRepo: () -> Unit = {}
+    onConfigureGithubRepo: () -> Unit = {},
+    lastFmUsername: String? = null,
+    lastFmHasCredentials: Boolean = false,
+    onOpenLastFmProfileOrConnect: () -> Unit = {},
+    onConfigureLastFmCredentials: () -> Unit = {}
 ) {
     Column(
         modifier = modifier
@@ -336,6 +342,41 @@ fun SettingsScreen(
                             onUpdateAudioSettings(audioSettings.copy(dynamicArtworkColors = enabled))
                         },
                         testTag = "settings_dynamic_colors_switch"
+                    )
+                }
+            }
+
+            // 4b. Last.fm y Scrobbling
+            item(key = "section_lastfm") {
+                SettingsSectionCard(title = "Last.fm y Scrobbling") {
+                    SettingsActionRow(
+                        icon = Icons.Rounded.Person,
+                        iconTint = if (lastFmUsername != null) LosslessCyan else CopperAmber,
+                        title = if (lastFmUsername != null) {
+                            "Last.fm conectado (@$lastFmUsername)"
+                        } else {
+                            "Conectar con Last.fm"
+                        },
+                        subtitle = when {
+                            lastFmUsername != null -> "Scrobbling en vivo y Favoritas sincronizadas · Toca para abrir Perfil"
+                            lastFmHasCredentials -> "Inicia sesión para scrobbling en vivo, Top Canciones y previews Deezer"
+                            else -> "Configura API Key / Secret e inicia sesión con Last.fm"
+                        },
+                        onClick = onOpenLastFmProfileOrConnect,
+                        testTag = "settings_lastfm_connect_row"
+                    )
+                    SettingsDivider()
+                    SettingsActionRow(
+                        icon = Icons.Rounded.Key,
+                        iconTint = if (lastFmHasCredentials) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                        title = "Credenciales API de Last.fm",
+                        subtitle = if (lastFmHasCredentials) {
+                            "API Key y Shared Secret guardados · Toca para editar"
+                        } else {
+                            "Ingresa LASTFM_API_KEY y Shared Secret manualmente"
+                        },
+                        onClick = onConfigureLastFmCredentials,
+                        testTag = "settings_lastfm_credentials_row"
                     )
                 }
             }

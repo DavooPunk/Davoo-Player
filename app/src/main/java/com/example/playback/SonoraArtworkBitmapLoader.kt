@@ -48,6 +48,11 @@ class SonoraArtworkBitmapLoader(
     }
 
     private fun loadArtworkSynchronously(uri: Uri): Bitmap? {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme == "http" || scheme == "https") {
+            return runCatching { delegate.loadBitmap(uri).get() }.getOrNull()
+        }
+
         // 1. Try extracting embedded artwork directly from the audio file (MP3 ID3 APIC / FLAC picture)
         val embedded = extractEmbeddedArtBytes(uri)
         if (embedded != null) {

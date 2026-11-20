@@ -50,7 +50,7 @@ object ArtworkColorExtractor {
     private const val TARGET_COLOR_SAMPLE_PX = 64
 
     private fun decodeSmallArtwork(context: Context, audioUri: String, albumArtUri: String?): Bitmap? {
-        if (audioUri.isNotBlank()) {
+        if (audioUri.isNotBlank() && !audioUri.startsWith("http", ignoreCase = true)) {
             val retriever = MediaMetadataRetriever()
             val bytes = try {
                 retriever.setDataSource(context, Uri.parse(audioUri))
@@ -65,7 +65,7 @@ object ArtworkColorExtractor {
             }
         }
 
-        if (!albumArtUri.isNullOrBlank()) {
+        if (!albumArtUri.isNullOrBlank() && !albumArtUri.startsWith("http", ignoreCase = true)) {
             val uri = runCatching { Uri.parse(albumArtUri) }.getOrNull()
             if (uri != null && !isLikelyAudioUri(context, uri)) {
                 val streamBytes = runCatching {

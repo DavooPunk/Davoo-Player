@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.net.Uri
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -1755,10 +1756,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.2, v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.0.3, v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.2").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.3").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.2").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.1").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.0").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v1.0.0").performScrollTo().assertIsDisplayed()
@@ -2672,5 +2674,600 @@ class ExampleRobolectricTest {
         assertEquals("2.1.0", info.latestVersion)
         assertEquals("https://github.com/DavooPunk/Davoo-Player/releases/tag/v2.1.0", info.releaseUrl)
         assertEquals("Mejoras de audio", info.releaseNotes)
+    }
+
+    @Test
+    fun `lastFmApiSignature computes exact MD5 with alphabetical sorting and ignores format`() {
+        // Expected raw payload before MD5:
+        // "api_keyk123artistDaft Punkmethodtrack.loveartists? no -> ordered: api_keyk123artistDaft Punkmethodtrack.lovesksess9trackAerodynamicsecretABC"
+        val params = mapOf(
+            "method" to "track.love",
+            "format" to "json",
+            "track" to "Aerodynamic",
+            "api_key" to "k123",
+            "sk" to "sess9",
+            "artist" to "Daft Punk"
+        )
+        val sig = com.example.data.remote.generateLastFmApiSignature(params, "secretABC")
+
+        val expectedPayload = "api_keyk123artistDaft Punkmethodtrack.lovesksess9trackAerodynamicsecretABC"
+        val expectedDigest = java.security.MessageDigest.getInstance("MD5")
+            .digest(expectedPayload.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+        assertEquals(32, sig.length)
+        assertEquals(expectedDigest, sig)
+        // Changing format must not change signature
+        val sigXml = com.example.data.remote.generateLastFmApiSignature(
+            params + ("format" to "xml"),
+            "secretABC"
+        )
+        assertEquals(sig, sigXml)
+    }
+
+    @Test
+    fun `lastFmScrobblePolicy enforces 50 percent for local tracks and 15 seconds single-shot for Deezer previews`() {
+        // Local 4-minute track (240_000 ms -> threshold 120_000 ms)
+        assertFalse(
+            com.example.data.repository.LastFmScrobblePolicy.shouldScrobble(
+                trackId = "media_100",
+                positionMs = 119_999L,
+                durationMs = 240_000L,
+                alreadyScrobbled = false
+            )
+        )
+        assertTrue(
+            com.example.data.repository.LastFmScrobblePolicy.shouldScrobble(
+                trackId = "media_100",
+                positionMs = 120_000L,
+                durationMs = 240_000L,
+                alreadyScrobbled = false
+            )
+        )
+        assertFalse(
+            com.example.data.repository.LastFmScrobblePolicy.shouldScrobble(
+                trackId = "media_100",
+                positionMs = 180_000L,
+                durationMs = 240_000L,
+                alreadyScrobbled = true
+            )
+        )
+
+        // Deezer 30s preview track -> threshold 15_000 ms
+        val previewId = "${com.example.model.LastFmTrackItem.PREVIEW_TRACK_ID_PREFIX}999"
+        assertFalse(
+            com.example.data.repository.LastFmScrobblePolicy.shouldScrobble(
+                trackId = previewId,
+                positionMs = 14_999L,
+                durationMs = 30_000L,
+                alreadyScrobbled = false
+            )
+        )
+        assertTrue(
+            com.example.data.repository.LastFmScrobblePolicy.shouldScrobble(
+                trackId = previewId,
+                positionMs = 15_000L,
+                durationMs = 30_000L,
+                alreadyScrobbled = false
+            )
+        )
+    }
+
+    @Test
+    fun `lastFmRepository enriches via Deezer with in-memory cache and executes signed OAuth plus scrobble`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        prefs.saveLastFmCredentialsOverride("demo_key_1", "demo_secret_1")
+
+        var deezerCallCount = 0
+        var lastScrobbleSig: String? = null
+        val mockClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val urlStr = req.url.toString()
+                val jsonResponse = when {
+                    urlStr.contains("deezer") -> {
+                        deezerCallCount++
+                        """
+                        {
+                          "data": [{
+                            "id": 3135556,
+                            "title": "Harder, Better, Faster, Stronger",
+                            "duration": 30,
+                            "preview": "http://cdns-preview.dzcdn.net/stream/preview.mp3",
+                            "artist": { "name": "Daft Punk" },
+                            "album": {
+                              "title": "Discovery",
+                              "cover_xl": "http://e-cdn-images.dzcdn.net/images/cover/xl.jpg"
+                            }
+                          }]
+                        }
+                        """.trimIndent()
+                    }
+                    urlStr.contains("method=auth.getSession") -> {
+                        """{"session":{"name":"davoopunk","key":"sk_valid_999"}}"""
+                    }
+                    urlStr.contains("method=user.getInfo") -> {
+                        """{"user":{"name":"davoopunk","realname":"Davoo","playcount":"4321","image":[{"size":"extralarge","#text":"https://lastfm.freetls.fastly.net/i/u/avatar.png"}]}}"""
+                    }
+                    else -> {
+                        val sink = okio.Buffer()
+                        req.body?.writeTo(sink)
+                        val bodyText = sink.readUtf8()
+                        if (bodyText.contains("track.scrobble")) {
+                            lastScrobbleSig = bodyText
+                        }
+                        """{"scrobbles":{"@attr":{"accepted":1}}}"""
+                    }
+                }
+                okhttp3.Response.Builder()
+                    .request(req)
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(with(okhttp3.ResponseBody) { jsonResponse.toResponseBody(null) })
+                    .build()
+            }
+            .build()
+
+        val apiService = com.example.data.remote.MusicApiService(
+            client = mockClient,
+            lastFmBaseUrl = "https://mock.last.fm/2.0/",
+            deezerBaseUrl = "https://mock.deezer.com"
+        )
+        val repo = com.example.data.repository.LastFmRepository(prefs, apiService)
+
+        // 1. OAuth buildAuthUrl & token exchange
+        val authUrl = repo.buildAuthUrl()!!
+        assertTrue(authUrl.contains("api_key=demo_key_1"))
+        assertTrue(authUrl.contains("davooplayer%3A%2F%2Flastfm-callback"))
+
+        val sessionRes = repo.completeOAuthCallback("tok_12345")
+        assertTrue(sessionRes.isSuccess)
+        assertEquals("davoopunk", sessionRes.getOrNull()?.username)
+        assertEquals("sk_valid_999", repo.loadSession()?.sessionKey)
+
+        // 2. Deezer enrichment + in-memory LruCache deduplication
+        val first = repo.buscarEnDeezer("Daft Punk", "Harder, Better, Faster, Stronger")
+        val second = repo.buscarEnDeezer("daft punk", "harder, better, faster, stronger")
+        assertNotNull(first)
+        assertEquals("https://e-cdn-images.dzcdn.net/images/cover/xl.jpg", first!!.coverXlUrl)
+        assertEquals("https://cdns-preview.dzcdn.net/stream/preview.mp3", first.previewUrl)
+        assertEquals(1, deezerCallCount)
+        assertEquals(first, second)
+
+        // 3. Signed scrobble POST
+        val scrobbleRes = repo.scrobbleTrack(
+            artist = "Daft Punk",
+            track = "Harder, Better, Faster, Stronger",
+            timestampSec = 1700000000L,
+            album = "Discovery",
+            durationMs = 224_000L
+        )
+        assertTrue(scrobbleRes.isSuccess)
+        assertTrue(lastScrobbleSig!!.contains("api_sig="))
+        assertTrue(lastScrobbleSig!!.contains("sk=sk_valid_999"))
+    }
+
+    @Test
+    fun `lastFmProfileScreen renders disconnected card and connected Top Loved Recent tabs`() {
+        var connectClicks = 0
+        var selectedTab = com.example.model.LastFmProfileTab.TOP_TRACKS
+        var selectedPeriod = com.example.model.LastFmPeriod.SEVEN_DAYS
+        var playedTitle: String? = null
+        var lovedTitle: String? = null
+
+        val sampleTrack = com.example.model.LastFmTrackItem(
+            id = "top_1",
+            title = "One More Time",
+            artist = "Daft Punk",
+            album = "Discovery",
+            playcount = 88L,
+            rank = 1,
+            isNowPlaying = true,
+            isLoved = false,
+            deezerEnrichment = com.example.model.DeezerTrackEnrichment(
+                deezerTrackId = 4455L,
+                title = "One More Time",
+                artist = "Daft Punk",
+                albumTitle = "Discovery",
+                coverXlUrl = null,
+                previewUrl = "https://cdns-preview.dzcdn.net/preview.mp3",
+                durationSec = 30
+            ),
+            deezerLookupDone = true
+        )
+
+        val stateHolder = androidx.compose.runtime.mutableStateOf(
+            com.example.ui.viewmodel.LastFmUiState(
+                hasCredentials = true,
+                session = null
+            )
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.LastFmProfileScreen(
+                    uiState = stateHolder.value,
+                    currentTrackId = null,
+                    isPlaying = false,
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    onConnectClick = { connectClicks++ },
+                    onOpenCredentialsDialog = {},
+                    onLogoutClick = {},
+                    onRefreshClick = {},
+                    onOpenSettings = {},
+                    onSelectTab = { tab ->
+                        selectedTab = tab
+                        stateHolder.value = stateHolder.value.copy(selectedTab = tab)
+                    },
+                    onSelectPeriod = { period ->
+                        selectedPeriod = period
+                        stateHolder.value = stateHolder.value.copy(selectedPeriod = period)
+                    },
+                    onEnsureDeezerEnrichment = {},
+                    onPlayPreview = { playedTitle = it.title },
+                    onToggleLove = { lovedTitle = it.title }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Disconnected state shows CTA button
+        composeTestRule.onNodeWithTag("lastfm_disconnected_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lastfm_connect_button").performClick()
+        assertEquals(1, connectClicks)
+
+        // Switch to connected state with sample tracks
+        stateHolder.value = com.example.ui.viewmodel.LastFmUiState(
+            hasCredentials = true,
+            session = com.example.model.LastFmSession("sk_1", "davoopunk"),
+            userInfo = com.example.model.LastFmUserInfo("davoopunk", "Davoo", 950L),
+            selectedTab = com.example.model.LastFmProfileTab.TOP_TRACKS,
+            topTracks = listOf(sampleTrack),
+            recentTracks = listOf(sampleTrack)
+        )
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("lastfm_connected_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("@davoopunk").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lastfm_track_row_top_1").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lastfm_now_playing_badge", useUnmergedTree = true).assertIsDisplayed()
+
+        // Switch period & tab
+        composeTestRule.onNodeWithTag("lastfm_period_12month").performClick()
+        assertEquals(com.example.model.LastFmPeriod.TWELVE_MONTHS, selectedPeriod)
+
+        composeTestRule.onNodeWithTag("lastfm_love_button_top_1").performClick()
+        assertEquals("One More Time", lovedTitle)
+
+        composeTestRule.onNodeWithTag("lastfm_track_row_top_1").performClick()
+        assertEquals("One More Time", playedTitle)
+
+        composeTestRule.onNodeWithTag("lastfm_tab_recent").performClick()
+        assertEquals(com.example.model.LastFmProfileTab.RECENT_TRACKS, selectedTab)
+    }
+
+    @Test
+    fun `settingsScreen exposes LastFm connect and API credentials rows`() {
+        var lastFmConnectClicks = 0
+        var lastFmCredsClicks = 0
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.SettingsScreen(
+                    totalTracksCount = 8,
+                    isScanning = false,
+                    excludedFoldersCount = 0,
+                    sdCardFoldersCount = 0,
+                    audioSettings = com.example.model.AudioSettings(),
+                    isSleepTimerActive = false,
+                    preferredTranslationEngine = com.example.ai.TranslationEngine.GOOGLE,
+                    onBack = {},
+                    onRefreshLibrary = {},
+                    onImportFiles = {},
+                    onOpenFoldersManager = {},
+                    onAddSdCardFolder = {},
+                    onOpenEqualizer = {},
+                    onOpenSleepTimer = {},
+                    onUpdateAudioSettings = {},
+                    onSelectTranslationEngine = {},
+                    onOpenAboutAndLegal = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    lastFmUsername = null,
+                    lastFmHasCredentials = false,
+                    onOpenLastFmProfileOrConnect = { lastFmConnectClicks++ },
+                    onConfigureLastFmCredentials = { lastFmCredsClicks++ }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_lastfm_credentials_row"))
+        composeTestRule.onNodeWithTag("settings_lastfm_connect_row").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("settings_lastfm_credentials_row").assertIsDisplayed().performClick()
+        assertEquals(1, lastFmConnectClicks)
+        assertEquals(1, lastFmCredsClicks)
+    }
+
+    @Test
+    fun `globalSearchOverlay keeps synchronous localQuery independent of lagging ViewModel searchQuery and clears cleanly`() {
+        val reportedQueries = mutableListOf<String>()
+        val staleUiState = androidx.compose.runtime.mutableStateOf(
+            com.example.ui.viewmodel.SonoraUiState(
+                searchQuery = "",
+                isGlobalSearchOpen = true
+            )
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.GlobalSearchOverlay(
+                    uiState = staleUiState.value,
+                    currentTrackId = null,
+                    isPlaying = false,
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    onQueryChange = { reportedQueries.add(it) },
+                    onClose = {},
+                    onPlayTrack = { _, _ -> },
+                    onPlayNext = {},
+                    onAddToQueue = {},
+                    onAddToPlaylist = {},
+                    onToggleFavorite = {},
+                    onShowLyrics = {},
+                    onEditTags = {},
+                    onShowMetadata = {},
+                    onOpenAlbum = {},
+                    onOpenArtist = {},
+                    onOpenPlaylist = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Simulate rapid typing while ViewModel searchQuery lags behind
+        val inputNode = composeTestRule.onNodeWithTag("global_search_input")
+        inputNode.performTextInput("f")
+        inputNode.performTextInput("a")
+        // Lagging StateFlow emits stale "f" mid-typing
+        staleUiState.value = staleUiState.value.copy(searchQuery = "f")
+        inputNode.performTextInput("rr")
+        composeTestRule.waitForIdle()
+
+        // Local field must retain exact typed order "farr" (never overwritten or reversed by stale "f")
+        composeTestRule.onNodeWithTag("global_search_input").assertTextContains("farr")
+        assertEquals(listOf("f", "fa", "farr"), reportedQueries)
+        composeTestRule.onNodeWithTag("global_search_loading_state").assertIsDisplayed()
+
+        // Once debounced ViewModel settles on "farr" with 0 matches, empty state renders cleanly
+        staleUiState.value = staleUiState.value.copy(searchQuery = "farr")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("global_search_empty_state").assertIsDisplayed()
+
+        // Clicking Clear "X" resets localQuery immediately and notifies ViewModel
+        composeTestRule.onNodeWithTag("global_search_clear_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("", reportedQueries.last())
+        composeTestRule.onNodeWithText("Búsqueda global en tiempo real").assertIsDisplayed()
+    }
+
+    @Test
+    fun `musicApiService cleans collaboration artists and falls back to open Deezer search with https urls`() = runTest {
+        assertEquals(
+            "K/DA",
+            com.example.data.remote.MusicApiService.extractPrimaryArtist("K/DA, (G)I-DLE, Wolftyla, Bea Miller")
+        )
+        assertEquals(
+            "Calvin Harris",
+            com.example.data.remote.MusicApiService.extractPrimaryArtist("Calvin Harris & Dua Lipa")
+        )
+        assertEquals(
+            "Post Malone",
+            com.example.data.remote.MusicApiService.extractPrimaryArtist("Post Malone feat. Swae Lee")
+        )
+        assertEquals(
+            "J Balvin",
+            com.example.data.remote.MusicApiService.extractPrimaryArtist("J Balvin ft. Bad Bunny")
+        )
+        assertEquals(
+            "POP/STARS",
+            com.example.data.remote.MusicApiService.cleanTrackTitleForSearch("POP/STARS (feat. Jaira Burns) [Remix]")
+        )
+
+        val seenQueries = mutableListOf<String>()
+        val mockClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val queryParam = req.url.queryParameter("q").orEmpty()
+                seenQueries.add(queryParam)
+                val bodyJson = if (queryParam.contains("artist:\"K/DA\"")) {
+                    """{"data":[]}"""
+                } else {
+                    """
+                    {
+                      "data": [{
+                        "id": 991122,
+                        "title": "POP/STARS",
+                        "duration": 30,
+                        "preview": "http://cdns-preview-e.dzcdn.net/stream/c-kda.mp3",
+                        "artist": { "name": "K/DA" },
+                        "album": {
+                          "title": "POP/STARS",
+                          "cover_xl": "",
+                          "cover_big": "http://e-cdn-images.dzcdn.net/images/cover/kda/500x500.jpg"
+                        }
+                      }]
+                    }
+                    """.trimIndent()
+                }
+                okhttp3.Response.Builder()
+                    .request(req)
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(with(okhttp3.ResponseBody) { bodyJson.toResponseBody(null) })
+                    .build()
+            }
+            .build()
+
+        val apiService = com.example.data.remote.MusicApiService(
+            client = mockClient,
+            deezerBaseUrl = "https://mock.deezer.com"
+        )
+
+        val result = apiService.searchDeezerTrack(
+            artist = "K/DA, (G)I-DLE, Wolftyla, Bea Miller",
+            track = "POP/STARS (League of Legends)"
+        )
+
+        assertNotNull(result)
+        assertEquals(2, seenQueries.size)
+        assertEquals("artist:\"K/DA\" track:\"POP/STARS\"", seenQueries[0])
+        assertEquals("K/DA POP/STARS", seenQueries[1])
+        assertEquals("https://e-cdn-images.dzcdn.net/images/cover/kda/500x500.jpg", result!!.coverXlUrl)
+        assertEquals("https://cdns-preview-e.dzcdn.net/stream/c-kda.mp3", result.previewUrl)
+    }
+
+    @Test
+    fun `lastFmUserInfo forces https on avatar urls and repository retries empty deezer cache entries on clear`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        prefs.saveLastFmCredentialsOverride("key_avatar", "secret_avatar")
+
+        var deezerAttempts = 0
+        val mockClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val urlStr = req.url.toString()
+                val jsonPayload = when {
+                    urlStr.contains("method=user.getInfo") -> {
+                        """
+                        {
+                          "user": {
+                            "name": "DavooPunk",
+                            "realname": "David",
+                            "playcount": "1234",
+                            "image": [
+                              {"size":"medium","#text":"http://lastfm.freetls.fastly.net/i/u/64s/avatar.png"},
+                              {"size":"large","#text":"http://lastfm.freetls.fastly.net/i/u/174s/avatar.png"},
+                              {"size":"extralarge","#text":""}
+                            ]
+                          }
+                        }
+                        """.trimIndent()
+                    }
+                    urlStr.contains("deezer") -> {
+                        deezerAttempts++
+                        if (deezerAttempts <= 2) {
+                            """{"data":[]}"""
+                        } else {
+                            """
+                            {
+                              "data": [{
+                                "id": 7788,
+                                "title": "Nightcall",
+                                "duration": 30,
+                                "preview": "http://cdns-preview.dzcdn.net/nightcall.mp3",
+                                "artist": {"name": "Kavinsky"},
+                                "album": {"title": "OutRun", "cover_xl": "http://e-cdn-images.dzcdn.net/nightcall.jpg"}
+                              }]
+                            }
+                            """.trimIndent()
+                        }
+                    }
+                    else -> """{}"""
+                }
+                okhttp3.Response.Builder()
+                    .request(req)
+                    .protocol(okhttp3.Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body(with(okhttp3.ResponseBody) { jsonPayload.toResponseBody(null) })
+                    .build()
+            }
+            .build()
+
+        val apiService = com.example.data.remote.MusicApiService(
+            client = mockClient,
+            lastFmBaseUrl = "https://mock.last.fm/2.0/",
+            deezerBaseUrl = "https://mock.deezer.com"
+        )
+        val userInfo = apiService.getUserInfo("key_avatar", "DavooPunk").getOrThrow()
+        assertEquals("https://lastfm.freetls.fastly.net/i/u/174s/avatar.png", userInfo.avatarUrl)
+
+        val repo = com.example.data.repository.LastFmRepository(prefs, apiService)
+        // First lookup returns null across both strict + open attempts (2 HTTP calls)
+        assertEquals(null, repo.buscarEnDeezer("Kavinsky", "Nightcall"))
+        assertEquals(2, deezerAttempts)
+        // Cached negative result prevents repeated calls until cleared
+        assertEquals(null, repo.buscarEnDeezer("Kavinsky", "Nightcall"))
+        assertEquals(2, deezerAttempts)
+
+        // Clearing empty entries lets refresh retry and succeed
+        repo.clearEmptyDeezerCacheEntries()
+        val retried = repo.buscarEnDeezer("Kavinsky", "Nightcall")
+        assertNotNull(retried)
+        assertEquals("https://e-cdn-images.dzcdn.net/nightcall.jpg", retried!!.coverXlUrl)
+        assertEquals(3, deezerAttempts)
+    }
+
+    @Test
+    fun `lastFmTrackMatcher finds local library matches and falls back cleanly when absent`() {
+        val localTrack = AudioTrack(
+            id = "local_kda_1",
+            contentUri = "content://media/external/audio/media/909",
+            title = "POP/STARS",
+            artist = "K/DA",
+            album = "League of Legends",
+            albumId = 909L,
+            albumArtUri = null,
+            durationMs = 191_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 25_000_000L,
+            dateAddedSec = 100L,
+            folderName = "Music"
+        )
+
+        val collabItem = com.example.model.LastFmTrackItem(
+            id = "top_1",
+            title = "POP/STARS (feat. Jaira Burns)",
+            artist = "K/DA, (G)I-DLE, Madison Beer",
+            deezerLookupDone = true
+        )
+        val missingItem = com.example.model.LastFmTrackItem(
+            id = "top_2",
+            title = "Song Not On Device",
+            artist = "Remote Artist",
+            deezerEnrichment = com.example.model.DeezerTrackEnrichment(
+                deezerTrackId = 5511L,
+                title = "Song Not On Device",
+                artist = "Remote Artist",
+                albumTitle = "Remote Album",
+                coverXlUrl = "https://e-cdn-images.dzcdn.net/cover.jpg",
+                previewUrl = "https://cdns-preview.dzcdn.net/preview.mp3",
+                durationSec = 30
+            ),
+            deezerLookupDone = true
+        )
+
+        val matched = com.example.data.repository.LastFmTrackMatcher.findMatchingLocalTrack(
+            collabItem,
+            listOf(localTrack)
+        )
+        assertEquals("local_kda_1", matched?.id)
+
+        val notLocal = com.example.data.repository.LastFmTrackMatcher.findMatchingLocalTrack(
+            missingItem,
+            listOf(localTrack)
+        )
+        assertEquals(null, notLocal)
+        assertEquals("deezer_preview:5511", missingItem.toPreviewAudioTrack()?.id)
     }
 }

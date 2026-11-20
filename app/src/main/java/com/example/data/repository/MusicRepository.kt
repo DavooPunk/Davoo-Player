@@ -272,6 +272,30 @@ class MusicRepository(
     }
 
     suspend fun extractTrackMetadata(track: AudioTrack): AudioTrackMetadata {
+        if (track.contentUri.startsWith("http://", ignoreCase = true) ||
+            track.contentUri.startsWith("https://", ignoreCase = true)
+        ) {
+            return AudioTrackMetadata(
+                title = track.title,
+                artist = track.artist,
+                album = track.album,
+                albumArtist = track.albumArtist,
+                genre = track.genre,
+                year = track.year,
+                trackNumber = track.trackNumber,
+                durationMs = track.durationMs,
+                format = track.format,
+                mimeType = track.mimeType,
+                sizeBytes = track.sizeBytes,
+                folderName = track.folderName,
+                hasEmbeddedArtwork = !track.albumArtUri.isNullOrBlank(),
+                techSpecs = AudioTechSpecs(
+                    sampleRateHz = 44100,
+                    bitrateBps = 128000,
+                    channelCount = 2
+                )
+            )
+        }
         return scanner.extractTrackMetadata(track).let { meta ->
             meta.copy(
                 title = track.title,
@@ -290,7 +314,10 @@ class MusicRepository(
 
     suspend fun toggleFavorite(trackId: String): Boolean = trackStatsDao.toggleFavorite(trackId)
 
-    suspend fun recordPlay(trackId: String) = trackStatsDao.recordPlay(trackId)
+    suspend fun recordPlay(trackId: String) {
+        if (trackId.startsWith(com.example.model.LastFmTrackItem.PREVIEW_TRACK_ID_PREFIX)) return
+        trackStatsDao.recordPlay(trackId)
+    }
 
     suspend fun saveTrackTagOverride(
         trackId: String,
