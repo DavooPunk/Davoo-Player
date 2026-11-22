@@ -18,11 +18,14 @@ import com.example.data.local.PlaybackPreferencesStore
 import com.example.data.local.SonoraDatabase
 import com.example.data.repository.AppUpdateChecker
 import com.example.data.repository.AppUpdateInfo
+import com.example.data.repository.AudioTagWriter
 import com.example.data.repository.DeviceMusicScanner
 import com.example.data.repository.LastFmRepository
 import com.example.data.repository.LastFmTrackMatcher
 import com.example.data.repository.MusicRepository
 import com.example.data.repository.OnlineLyricsCandidate
+import com.example.data.repository.PhysicalTagEditOutcome
+import com.example.data.repository.TrackTagEditRequest
 import com.example.data.repository.UpdateCheckResult
 import com.example.playback.AppUpdateNotifier
 import com.example.model.AlbumGroup
@@ -721,6 +724,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     fun skipPrevious() = playbackController.skipPrevious()
     fun skipToQueueIndex(index: Int) = playbackController.skipToQueueIndex(index)
     fun removeFromQueue(index: Int) = playbackController.removeFromQueue(index)
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = playbackController.moveQueueItem(fromIndex, toIndex)
+    fun removeTracksFromPlaybackQueue(trackIds: Set<String>) = playbackController.removeTracksFromQueue(trackIds)
     fun toggleShuffle() = playbackController.toggleShuffle()
     fun cycleRepeatMode() = playbackController.cycleRepeatMode()
 
@@ -842,6 +847,43 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
                 customArtworkUri = customArtworkUri
             )
             snackbarFlow.value = "Etiquetas actualizadas en tu biblioteca"
+        }
+    }
+
+    suspend fun commitPhysicalTagEdit(request: TrackTagEditRequest): PhysicalTagEditOutcome {
+        val outcome = AudioTagWriter.writeTagsAndRename(getApplication(), request)
+        when (outcome) {
+            is PhysicalTagEditOutcome.Success -> {
+                repository.applyEditedTrackInLibrary(request.track, outcome.updatedTrack)
+                playbackController.refreshTrackReferences(listOf(outcome.updatedTrack))
+                snackbarFlow.value = when {
+                    outcome.renamedFile && outcome.physicalTagsWritten ->
+                        "Archivo renombrado y etiquetas guardadas"
+                    outcome.renamedFile ->
+                        "Archivo renombrado y actualizado en tu biblioteca"
+                    outcome.physicalTagsWritten ->
+                        "Etiquetas guardadas en el archivo"
+                    else ->
+                        "Etiquetas actualizadas en tu biblioteca"
+                }
+            }
+            is PhysicalTagEditOutcome.Failure -> {
+                snackbarFlow.value = outcome.reason
+            }
+            is PhysicalTagEditOutcome.NeedsWritePermission -> Unit
+        }
+        return outcome
+    }
+
+    fun onPhysicalTracksDeleted(tracks: List<AudioTrack>, message: String? = null) {
+        if (tracks.isEmpty()) return
+        val ids = tracks.mapTo(HashSet()) { it.id }
+        playbackController.removeTracksFromQueue(ids)
+        viewModelScope.launch {
+            repository.cleanupDeletedTracks(tracks)
+            if (!message.isNullOrBlank()) {
+                snackbarFlow.value = message
+            }
         }
     }
 

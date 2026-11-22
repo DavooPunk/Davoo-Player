@@ -4,16 +4,20 @@ import android.Manifest
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -1756,10 +1760,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.3, v2.0.2, v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.3").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.4").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.3").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.2").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.1").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.0").performScrollTo().assertIsDisplayed()
@@ -3269,5 +3274,679 @@ class ExampleRobolectricTest {
         )
         assertEquals(null, notLocal)
         assertEquals("deezer_preview:5511", missingItem.toPreviewAudioTrack()?.id)
+    }
+
+    @Test
+    fun `crossfadeMath computes equal-power curve and respects repeatOne, speed, and stopAfterCurrentTrack`() {
+        val (outStart, inStart) = com.example.playback.CrossfadeMath.equalPowerGains(0f)
+        assertEquals(1.0f, outStart, 0.001f)
+        assertEquals(0.0f, inStart, 0.001f)
+
+        val (outMid, inMid) = com.example.playback.CrossfadeMath.equalPowerGains(0.5f)
+        assertEquals(0.7071f, outMid, 0.01f)
+        assertEquals(0.7071f, inMid, 0.01f)
+        assertEquals(1.0f, outMid * outMid + inMid * inMid, 0.001f)
+
+        val (outEnd, inEnd) = com.example.playback.CrossfadeMath.equalPowerGains(1f)
+        assertEquals(0.0f, outEnd, 0.001f)
+        assertEquals(1.0f, inEnd, 0.001f)
+
+        // 3-minute track with 5s crossfade: should NOT trigger early at 170s, SHOULD trigger at 175.5s
+        assertFalse(
+            com.example.playback.CrossfadeMath.shouldTriggerCrossfade(
+                crossfadeSeconds = 5,
+                durationMs = 180_000L,
+                positionMs = 170_000L,
+                hasNextItem = true,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF,
+                playbackSpeed = 1.0f,
+                stopAfterCurrentTrack = false,
+                alreadyTransitioning = false
+            )
+        )
+        assertTrue(
+            com.example.playback.CrossfadeMath.shouldTriggerCrossfade(
+                crossfadeSeconds = 5,
+                durationMs = 180_000L,
+                positionMs = 175_500L,
+                hasNextItem = true,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF,
+                playbackSpeed = 1.0f,
+                stopAfterCurrentTrack = false,
+                alreadyTransitioning = false
+            )
+        )
+        // Must NOT trigger when Repeat One or stopAfterCurrentTrack is enabled
+        assertFalse(
+            com.example.playback.CrossfadeMath.shouldTriggerCrossfade(
+                crossfadeSeconds = 5,
+                durationMs = 180_000L,
+                positionMs = 175_500L,
+                hasNextItem = true,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE,
+                playbackSpeed = 1.0f,
+                stopAfterCurrentTrack = false,
+                alreadyTransitioning = false
+            )
+        )
+        assertFalse(
+            com.example.playback.CrossfadeMath.shouldTriggerCrossfade(
+                crossfadeSeconds = 5,
+                durationMs = 180_000L,
+                positionMs = 175_500L,
+                hasNextItem = true,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF,
+                playbackSpeed = 1.0f,
+                stopAfterCurrentTrack = true,
+                alreadyTransitioning = false
+            )
+        )
+        // Must NOT trigger for very short tracks <= 2x fade duration
+        assertFalse(
+            com.example.playback.CrossfadeMath.shouldTriggerCrossfade(
+                crossfadeSeconds = 8,
+                durationMs = 14_000L,
+                positionMs = 10_000L,
+                hasNextItem = true,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF,
+                playbackSpeed = 1.0f,
+                stopAfterCurrentTrack = false,
+                alreadyTransitioning = false
+            )
+        )
+    }
+
+    @Test
+    fun `settingsScreen displays crossfade slider and active overlap label`() {
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.SettingsScreen(
+                    totalTracksCount = 24,
+                    isScanning = false,
+                    excludedFoldersCount = 0,
+                    sdCardFoldersCount = 0,
+                    audioSettings = com.example.model.AudioSettings(crossfadeSeconds = 6),
+                    isSleepTimerActive = false,
+                    preferredTranslationEngine = com.example.ai.TranslationEngine.GOOGLE,
+                    onBack = {},
+                    onRefreshLibrary = {},
+                    onImportFiles = {},
+                    onOpenFoldersManager = {},
+                    onAddSdCardFolder = {},
+                    onOpenEqualizer = {},
+                    onOpenSleepTimer = {},
+                    onUpdateAudioSettings = {},
+                    onSelectTranslationEngine = {},
+                    onOpenAboutAndLegal = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_engine_google"))
+        composeTestRule.onNodeWithTag("settings_crossfade_slider").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("6 s").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Solapamiento suave de 6 s entre pistas").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `lyricsBottomSheet renders adaptive artwork accent card and floating translation menu`() {
+        val track = AudioTrack(
+            id = "lyr_adaptive_91",
+            contentUri = "content://media/external/audio/media/991",
+            title = "Neon Glow",
+            artist = "Davoo",
+            album = "Night Lights",
+            albumId = 91L,
+            albumArtUri = null,
+            durationMs = 195_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 4_800_000L,
+            dateAddedSec = 210L,
+            folderName = "Music"
+        )
+        val lyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(0L, "Dancing under neon glow", "Bailando bajo el brillo neón"),
+                com.example.model.LyricLine(12_000L, "Fade gently into the next song", "Fúndete suave en la siguiente canción")
+            ),
+            isSynced = true,
+            sourceLabel = "Archivo .lrc local · Bilingüe",
+            hasEmbeddedTranslation = true
+        )
+        val artworkAccent = androidx.compose.ui.graphics.Color(0xFFE91E63)
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 1_500L,
+                    onSeekTo = {},
+                    onPickLrcFile = {},
+                    onDismiss = {},
+                    onTranslateLyrics = { _, _, _ -> },
+                    onSaveManualTranslation = { _, _, _ -> },
+                    dynamicArtworkColorsEnabled = true,
+                    dynamicAccentColor = artworkAccent
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("lyrics_bottom_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_adaptive_card").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Dancing under neon glow").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Bailando bajo el brillo neón").assertIsDisplayed()
+
+        // Open floating translation menu and confirm chips & controls render cleanly under adaptive palette
+        composeTestRule.onNodeWithTag("lyrics_translate_menu_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("lyrics_translate_floating_menu").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_display_mode_row").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_engine_selector_row").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("translation_language_list").assertIsDisplayed()
+    }
+
+    @Test
+    fun `libraryScreen scroll to current button toggles with active track and scrolls to item`() {
+        val sampleTracks = (1..25).map { idx ->
+            AudioTrack(
+                id = "lib_track_$idx",
+                contentUri = "content://media/external/audio/media/$idx",
+                title = "Track Number %02d".format(idx),
+                artist = "Artist $idx",
+                album = "Album $idx",
+                albumId = idx.toLong(),
+                albumArtUri = null,
+                durationMs = 180_000L,
+                format = AudioFormat.MP3,
+                mimeType = "audio/mpeg",
+                sizeBytes = 3_000_000L,
+                dateAddedSec = idx.toLong(),
+                folderName = "Music"
+            )
+        }
+        val activeState = androidx.compose.runtime.mutableStateOf<AudioTrack?>(null)
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.LibraryScreen(
+                    uiState = com.example.ui.viewmodel.SonoraUiState(
+                        hasAudioPermission = true,
+                        allTracks = sampleTracks,
+                        filteredTracks = sampleTracks,
+                        albums = emptyList()
+                    ),
+                    playbackState = com.example.playback.PlaybackUiState(
+                        currentTrack = activeState.value,
+                        isPlaying = activeState.value != null
+                    ),
+                    onRequestPermission = {},
+                    onImportFiles = {},
+                    onSearchChange = {},
+                    onSelectSortOrder = {},
+                    onPlayTrack = { _, _ -> },
+                    onShuffleAll = {},
+                    onPlayNext = {},
+                    onAddToQueue = {},
+                    onAddToPlaylist = {},
+                    onToggleFavorite = {},
+                    onShowLyrics = {},
+                    onEditTags = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Hidden when no active track is playing
+        composeTestRule.onAllNodesWithTag("library_scroll_to_current_button").assertCountEquals(0)
+
+        // Activate track 22 (well below initial viewport) -> button appears next to selection button
+        composeTestRule.runOnUiThread {
+            activeState.value = sampleTracks[21]
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("library_lazy_column")
+            .performScrollToNode(hasTestTag("library_scroll_to_current_button"))
+        composeTestRule.onNodeWithTag("library_scroll_to_current_button")
+            .assertIsDisplayed()
+            .performClick()
+        composeTestRule.waitForIdle()
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+        composeTestRule.onNodeWithTag("track_row_lib_track_22").assertIsDisplayed()
+    }
+
+    @Test
+    fun `queueBottomSheet pins active song at top hides played items and maps upcoming indices`() {
+        val tracks = (0 until 12).map { idx ->
+            AudioTrack(
+                id = "q_$idx",
+                contentUri = "content://media/external/audio/media/${500 + idx}",
+                title = "Queue Song $idx",
+                artist = "Queue Artist",
+                album = "Queue Album",
+                albumId = 50L,
+                albumArtUri = null,
+                durationMs = 200_000L,
+                format = AudioFormat.FLAC,
+                mimeType = "audio/flac",
+                sizeBytes = 12_000_000L,
+                dateAddedSec = idx.toLong(),
+                folderName = "Music"
+            )
+        }
+        var selectedActualIndex: Int? = null
+        var removedActualIndex: Int? = null
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.QueueBottomSheet(
+                    playbackState = com.example.playback.PlaybackUiState(
+                        currentTrack = tracks[2],
+                        isPlaying = true,
+                        queue = tracks,
+                        currentIndex = 2
+                    ),
+                    onDismiss = {},
+                    onSelectIndex = { selectedActualIndex = it },
+                    onRemoveIndex = { removedActualIndex = it },
+                    onMoveItem = { _, _ -> }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Active song pinned at index 0 with "SONANDO AHORA" badge; previously played songs hidden
+        composeTestRule.onNodeWithTag("queue_now_playing_item").assertIsDisplayed()
+        composeTestRule.onNodeWithText("SONANDO AHORA").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Queue Song 2").assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Queue Song 0").assertCountEquals(0)
+        composeTestRule.onAllNodesWithText("Queue Song 1").assertCountEquals(0)
+
+        // Upcoming track at visualIndex 1 corresponds to actualIndex 3 (2 + 1)
+        composeTestRule.onNodeWithTag("queue_lazy_column").performScrollToIndex(1)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("queue_drag_handle_1", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithTag("queue_item_q_3_1").performClick()
+        assertEquals(3, selectedActualIndex)
+
+        composeTestRule.onNodeWithTag("queue_remove_button_1").performClick()
+        assertEquals(3, removedActualIndex)
+
+        // Scroll down to reveal scroll-to-top quick action in header
+        composeTestRule.onNodeWithTag("queue_lazy_column").performScrollToIndex(8)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("queue_scroll_to_top_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `trackRow exposes delete from device menu action and cleanupDeletedTracks purges all tables`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = Room.inMemoryDatabaseBuilder(context, com.example.data.local.SonoraDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+
+        try {
+            val playlistDao = db.playlistDao()
+            val importedDao = db.importedTrackDao()
+            val statsDao = db.trackStatsDao()
+            val overrideDao = db.trackTagOverrideDao()
+            val excludedDao = db.excludedFolderDao()
+            val lyricsDao = db.trackLyricsDao()
+            val translationDao = db.trackLyricsTranslationDao()
+
+            val targetTrack = AudioTrack(
+                id = "saf_del_1",
+                contentUri = "content://com.example.provider/audio/del1.mp3",
+                title = "Delete Me",
+                artist = "Cleanup Artist",
+                album = "Cleanup Album",
+                albumId = 77L,
+                albumArtUri = null,
+                durationMs = 150_000L,
+                format = AudioFormat.MP3,
+                mimeType = "audio/mpeg",
+                sizeBytes = 2_000_000L,
+                dateAddedSec = 10L,
+                folderName = "Downloads",
+                isSafImported = true
+            )
+
+            // Seed all 6 track-associated Room tables
+            val playlistId = playlistDao.insertPlaylist(com.example.data.local.PlaylistEntity(name = "P1", description = ""))
+            playlistDao.insertPlaylistTrack(PlaylistTrackEntity.fromAudioTrack(playlistId, targetTrack, 0))
+            importedDao.upsertTracks(
+                listOf(
+                    com.example.data.local.ImportedTrackEntity(
+                        uri = targetTrack.contentUri,
+                        title = targetTrack.title,
+                        artist = targetTrack.artist,
+                        album = targetTrack.album,
+                        durationMs = targetTrack.durationMs,
+                        formatName = targetTrack.format.name,
+                        mimeType = targetTrack.mimeType,
+                        sizeBytes = targetTrack.sizeBytes,
+                        folderName = targetTrack.folderName
+                    )
+                )
+            )
+            statsDao.recordPlay(targetTrack.id, 999L)
+            overrideDao.upsert(
+                com.example.data.local.TrackTagOverrideEntity(
+                    trackId = targetTrack.id,
+                    title = "Override",
+                    artist = "A",
+                    album = "Al",
+                    albumArtist = "",
+                    genre = "",
+                    year = 2024,
+                    trackNumber = 1,
+                    customArtworkUri = null
+                )
+            )
+            lyricsDao.upsert(
+                com.example.data.local.TrackLyricsEntity(
+                    trackId = targetTrack.id,
+                    rawLrcText = "line",
+                    sourceLabel = "LRC",
+                    updatedAt = 100L
+                )
+            )
+            translationDao.upsert(
+                com.example.data.local.TrackLyricsTranslationEntity(
+                    trackId = targetTrack.id,
+                    languageCode = "es",
+                    rawTranslatedText = "linea",
+                    sourceLabel = "Google",
+                    updatedAt = 100L
+                )
+            )
+
+            val repository = com.example.data.repository.MusicRepository(
+                context = context,
+                scanner = com.example.data.repository.DeviceMusicScanner(context),
+                playlistDao = playlistDao,
+                importedTrackDao = importedDao,
+                trackStatsDao = statsDao,
+                trackTagOverrideDao = overrideDao,
+                excludedFolderDao = excludedDao,
+                trackLyricsDao = lyricsDao,
+                trackLyricsTranslationDao = translationDao
+            )
+
+            repository.cleanupDeletedTracks(listOf(targetTrack))
+
+            assertTrue(playlistDao.getEntriesOrdered(playlistId).isEmpty())
+            assertTrue(importedDao.observeImportedTracks().first().isEmpty())
+            assertTrue(statsDao.observeAllStats().first().isEmpty())
+            assertTrue(overrideDao.observeAllOverrides().first().none { it.trackId == targetTrack.id })
+            assertNull(lyricsDao.getLyricsForTrack(targetTrack.id))
+            assertNull(translationDao.getTranslationForTrack(targetTrack.id))
+        } finally {
+            db.close()
+        }
+
+        // Also verify TrackRow renders and triggers "Eliminar del dispositivo" callback
+        var deleteMenuClicked = false
+        val uiTrack = AudioTrack(
+            id = "row_del_2",
+            contentUri = "content://media/external/audio/media/888",
+            title = "Menu Delete Track",
+            artist = "Menu Artist",
+            album = "Menu Album",
+            albumId = 88L,
+            albumArtUri = null,
+            durationMs = 140_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 2_000_000L,
+            dateAddedSec = 5L,
+            folderName = "Music"
+        )
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.TrackRow(
+                    track = uiTrack,
+                    isCurrentTrack = false,
+                    isPlaying = false,
+                    onClick = {},
+                    onPlayNext = {},
+                    onAddToQueue = {},
+                    onAddToPlaylist = {},
+                    onShowMetadata = {},
+                    onDeleteFromDevice = { deleteMenuClicked = true }
+                )
+            }
+        }
+        composeTestRule.onNodeWithTag("track_menu_row_del_2").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("track_delete_menu_row_del_2").assertIsDisplayed().performClick()
+        assertTrue(deleteMenuClicked)
+    }
+
+    @Test
+    fun `audioTagWriter writes MP3 ID3v2 and FLAC Vorbis tags while preserving lyrics and TagEditor edits filename`() {
+        val sampleMp3 = AudioTrack(
+            id = "tag_mp3_1",
+            contentUri = "content://media/external/audio/media/401",
+            title = "Original Song",
+            artist = "Orig Artist",
+            album = "Orig Album",
+            albumId = 41L,
+            albumArtUri = null,
+            durationMs = 180_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 3_000_000L,
+            dateAddedSec = 10L,
+            folderName = "Music",
+            filePath = "/storage/emulated/0/Music/01 - Old Track Name.mp3"
+        )
+        val parts = com.example.data.repository.AudioTagWriter.splitFileName(sampleMp3)
+        assertEquals("01 - Old Track Name", parts.baseName)
+        assertEquals(".mp3", parts.extensionWithDot)
+        assertEquals(
+            "New_Bad_Name.mp3",
+            com.example.data.repository.AudioTagWriter.buildTargetDisplayName("New/Bad:Name.mp3", ".mp3")
+        )
+        assertEquals("New_Bad_Name", com.example.data.repository.AudioTagWriter.sanitizeFileBaseName("New/Bad\\Name.mp3", ".mp3"))
+
+        // 1. Real MP3 binary tag rewrite preserving existing USLT frame & audio bytes
+        val tempDir = kotlin.io.path.createTempDirectory("davoo_tag_test").toFile()
+        try {
+            val mp3In = java.io.File(tempDir, "in.mp3")
+            val mp3Out = java.io.File(tempDir, "out.mp3")
+            val usltPayload = byteArrayOf(0x00, 'e'.code.toByte(), 'n'.code.toByte(), 'g'.code.toByte(), 0x00) +
+                "Preserved Lyrics Line".toByteArray(Charsets.ISO_8859_1)
+            val oldTagBytes = java.io.ByteArrayOutputStream().apply {
+                write("USLT".toByteArray(Charsets.ISO_8859_1))
+                write(byteArrayOf(0, 0, 0, usltPayload.size.toByte()))
+                write(byteArrayOf(0, 0))
+                write(usltPayload)
+            }.toByteArray()
+            val fakeAudioBytes = byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00, 0x11, 0x22, 0x33, 0x44)
+            java.io.FileOutputStream(mp3In).use { out ->
+                out.write(byteArrayOf('I'.code.toByte(), 'D'.code.toByte(), '3'.code.toByte(), 3, 0, 0))
+                out.write(
+                    byteArrayOf(
+                        ((oldTagBytes.size ushr 21) and 0x7F).toByte(),
+                        ((oldTagBytes.size ushr 14) and 0x7F).toByte(),
+                        ((oldTagBytes.size ushr 7) and 0x7F).toByte(),
+                        (oldTagBytes.size and 0x7F).toByte()
+                    )
+                )
+                out.write(oldTagBytes)
+                out.write(fakeAudioBytes)
+            }
+
+            val mp3Ok = com.example.data.repository.AudioTagWriter.writeId3v2TagsToFile(
+                sourceFile = mp3In,
+                destFile = mp3Out,
+                payload = com.example.data.repository.TagMetadataPayload(
+                    title = "Neon Skyline",
+                    artist = "DavooPunk",
+                    album = "Cyber Nights",
+                    albumArtist = "DavooPunk",
+                    genre = "Synthwave",
+                    year = 2026,
+                    trackNumber = 4,
+                    artworkBytes = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()),
+                    artworkMimeType = "image/jpeg"
+                )
+            )
+            assertTrue(mp3Ok)
+            val mp3Bytes = mp3Out.readBytes()
+            val mp3Ascii = String(mp3Bytes, Charsets.ISO_8859_1)
+            assertTrue(mp3Ascii.startsWith("ID3"))
+            assertTrue(mp3Ascii.contains("TIT2"))
+            assertTrue(mp3Ascii.contains("TPE1"))
+            assertTrue(mp3Ascii.contains("TALB"))
+            assertTrue(mp3Ascii.contains("APIC"))
+            assertTrue(mp3Ascii.contains("USLT"))
+            assertTrue(mp3Ascii.contains("Preserved Lyrics Line"))
+            val expectedTitleUtf16 = "Neon Skyline".toByteArray(Charsets.UTF_16LE)
+            val hasUtf16Title = (0..(mp3Bytes.size - expectedTitleUtf16.size)).any { offset ->
+                expectedTitleUtf16.indices.all { i -> mp3Bytes[offset + i] == expectedTitleUtf16[i] }
+            }
+            assertTrue(hasUtf16Title)
+            assertTrue(mp3Bytes.takeLast(fakeAudioBytes.size) == fakeAudioBytes.toList())
+
+            // 2. Real FLAC Vorbis comment + picture rewrite preserving STREAMINFO & LYRICS
+            val flacIn = java.io.File(tempDir, "in.flac")
+            val flacOut = java.io.File(tempDir, "out.flac")
+            val streamInfo = ByteArray(34) { idx -> (idx + 1).toByte() }
+            val oldCommentPayload = java.io.ByteArrayOutputStream().apply {
+                val vendor = "old".toByteArray(Charsets.UTF_8)
+                write(byteArrayOf(vendor.size.toByte(), 0, 0, 0))
+                write(vendor)
+                write(byteArrayOf(2, 0, 0, 0)) // 2 comments
+                listOf("TITLE=OldTitle", "LYRICS=Keep Flac Lyrics").forEach { c ->
+                    val b = c.toByteArray(Charsets.UTF_8)
+                    write(byteArrayOf(b.size.toByte(), 0, 0, 0))
+                    write(b)
+                }
+            }.toByteArray()
+            val flacFrames = byteArrayOf(0xFF.toByte(), 0xF8.toByte(), 0x69, 0x01, 0x77)
+            java.io.FileOutputStream(flacIn).use { out ->
+                out.write("fLaC".toByteArray(Charsets.ISO_8859_1))
+                // STREAMINFO (type 0, not last)
+                out.write(byteArrayOf(0, 0, 0, 34))
+                out.write(streamInfo)
+                // VORBIS_COMMENT (type 4, last = 0x84)
+                out.write(byteArrayOf(0x84.toByte(), 0, (oldCommentPayload.size ushr 8).toByte(), oldCommentPayload.size.toByte()))
+                out.write(oldCommentPayload)
+                out.write(flacFrames)
+            }
+
+            val flacOk = com.example.data.repository.AudioTagWriter.writeFlacTagsToFile(
+                sourceFile = flacIn,
+                destFile = flacOut,
+                payload = com.example.data.repository.TagMetadataPayload(
+                    title = "Lossless Master",
+                    artist = "DavooPunk",
+                    album = "Hi-Res EP",
+                    albumArtist = "DavooPunk",
+                    genre = "Electronic",
+                    year = 2026,
+                    trackNumber = 1,
+                    artworkBytes = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47),
+                    artworkMimeType = "image/png"
+                )
+            )
+            assertTrue(flacOk)
+            val flacBytes = flacOut.readBytes()
+            val flacUtf8 = String(flacBytes, Charsets.UTF_8)
+            assertTrue(flacUtf8.startsWith("fLaC"))
+            assertTrue(flacUtf8.contains("TITLE=Lossless Master"))
+            assertTrue(flacUtf8.contains("ARTIST=DavooPunk"))
+            assertTrue(flacUtf8.contains("LYRICS=Keep Flac Lyrics"))
+            assertTrue(flacBytes.takeLast(flacFrames.size) == flacFrames.toList())
+        } finally {
+            tempDir.deleteRecursively()
+        }
+
+        // 3. TagEditorBottomSheet UI: filename input displays extension & passes edited fileNameBase
+        var savedBaseName: String? = null
+        var savedTitle: String? = null
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.TagEditorBottomSheet(
+                    track = sampleMp3,
+                    pickedArtworkUri = null,
+                    onPickCoverImage = {},
+                    onClearCustomCover = {},
+                    onSave = { baseName, title, _, _, _, _, _, _, _ ->
+                        savedBaseName = baseName
+                        savedTitle = title
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("tag_filename_input").assertIsDisplayed()
+        composeTestRule.onNodeWithText(".mp3").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("tag_filename_input").performTextReplacement("Renamed\\Final/Mix")
+        composeTestRule.onNodeWithTag("tag_title_input").performTextReplacement("Final Mix Title")
+        composeTestRule.onNodeWithTag("save_tags_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+
+        assertEquals("Renamed_Final_Mix", savedBaseName)
+        assertEquals("Final Mix Title", savedTitle)
+    }
+
+    @Test
+    fun `creditsBottomSheet legal reflects offline plus optional integrations and changelog v204 omits legal changes`() {
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.CreditsBottomSheet(onDismiss = {})
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("about_tab_legal").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Offline por defecto · Integraciones opcionales (Last.fm, Deezer, letras)").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("legal_terms_card").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Software libre (MIT), APIs de terceros y uso responsable").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("legal_terms_card").assertTextContains("Servicios y APIs de terceros", substring = true)
+
+        composeTestRule.onNodeWithTag("legal_dmca_card").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Reproductor local · Vistas previas transmitidas desde API pública").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("legal_dmca_card").assertTextContains("Deezer API", substring = true)
+
+        // Verify v2.0.4 changelog covers features 1-3 cleanly (starting with Crossfade) without mentioning Legal tab changes
+        composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Crossfade real entre canciones", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Ir a la canción actual y cola reorganizada", substring = true).performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Eliminación física real de canciones del dispositivo", substring = true).performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Renombrado físico y escritura real de etiquetas", substring = true).performScrollTo().assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("Offline por defecto", substring = true).assertCountEquals(0)
+        composeTestRule.onAllNodesWithText("pestaña Legal", substring = true).assertCountEquals(0)
+        composeTestRule.onAllNodesWithText("Términos y Condiciones de Uso", substring = true).assertCountEquals(0)
     }
 }

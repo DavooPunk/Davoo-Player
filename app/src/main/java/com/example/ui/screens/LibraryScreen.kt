@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
@@ -56,7 +57,9 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -104,14 +107,23 @@ fun LibraryScreen(
 ) {
     var sortMenuExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
-    // Multi-selection state
+    // Multi-selection & delete states
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedTrackIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+    var singleDeleteTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
 
     val selectedTracks by remember(uiState.filteredTracks, selectedTrackIds) {
         derivedStateOf { uiState.filteredTracks.filter { it.id in selectedTrackIds } }
+    }
+
+    val currentTrackInFilteredIndex by remember(uiState.filteredTracks, playbackState.currentTrack?.id) {
+        derivedStateOf {
+            val currentId = playbackState.currentTrack?.id ?: return@derivedStateOf -1
+            uiState.filteredTracks.indexOfFirst { it.id == currentId }
+        }
     }
 
     LaunchedEffect(uiState.filteredTracks) {
@@ -490,26 +502,52 @@ fun LibraryScreen(
                                     }
                                 }
 
-                                IconButton(
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            isSelectionMode = false
-                                            selectedTrackIds = emptySet()
-                                        } else {
-                                            isSelectionMode = true
-                                            selectedTrackIds = emptySet()
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .minimumInteractiveComponentSize()
-                                        .testTag("library_select_mode_button")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Checklist,
-                                        contentDescription = "Selección múltiple",
-                                        tint = if (isSelectionMode) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    if (currentTrackInFilteredIndex >= 0) {
+                                        IconButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    listState.animateScrollToItem(
+                                                        headerItemCount + currentTrackInFilteredIndex
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("library_scroll_to_current_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.MyLocation,
+                                                contentDescription = "Ir a la canción actual",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                isSelectionMode = false
+                                                selectedTrackIds = emptySet()
+                                            } else {
+                                                isSelectionMode = true
+                                                selectedTrackIds = emptySet()
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("library_select_mode_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Checklist,
+                                            contentDescription = "Selección múltiple",
+                                            tint = if (isSelectionMode) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -601,7 +639,8 @@ fun LibraryScreen(
                             onShowMetadata = { onShowMetadata(track) },
                             onToggleFavorite = { onToggleFavorite(track) },
                             onShowLyrics = { onShowLyrics(track) },
-                            onEditTags = { onEditTags(track) }
+                            onEditTags = { onEditTags(track) },
+                            onDeleteFromDevice = { singleDeleteTargetTrack = track }
                         )
                     }
                 }
@@ -654,6 +693,39 @@ fun LibraryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    singleDeleteTargetTrack?.let { target ->
+        AlertDialog(
+            onDismissRequest = { singleDeleteTargetTrack = null },
+            title = { Text("Eliminar del dispositivo") },
+            text = {
+                Text(
+                    "¿Seguro que deseas eliminar «${target.title}» de forma permanente?" +
+                        " Android podrá pedir confirmación del sistema para archivos locales del dispositivo."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        singleDeleteTargetTrack = null
+                        onDeleteTracks(listOf(target))
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.testTag("confirm_single_delete_button")
+                ) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { singleDeleteTargetTrack = null }) {
                     Text("Cancelar")
                 }
             }

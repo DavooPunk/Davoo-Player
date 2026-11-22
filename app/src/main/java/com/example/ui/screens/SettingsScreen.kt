@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.SdCard
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -39,10 +40,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -259,6 +263,65 @@ fun SettingsScreen(
                         },
                         testTag = "settings_gapless_switch"
                     )
+                    SettingsDivider()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Tune,
+                                contentDescription = null,
+                                tint = if (audioSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Crossfade entre canciones",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = if (audioSettings.crossfadeSeconds > 0) {
+                                        "Solapamiento suave de ${audioSettings.crossfadeSeconds} s entre pistas"
+                                    } else {
+                                        "Desactivado · Ajusta de 1 a 12 s para mezclar transiciones"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = if (audioSettings.crossfadeSeconds == 0) "Off" else "${audioSettings.crossfadeSeconds} s",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (audioSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Slider(
+                            value = audioSettings.crossfadeSeconds.toFloat().coerceIn(0f, 12f),
+                            onValueChange = { raw ->
+                                val sec = raw.roundToInt().coerceIn(0, 12)
+                                if (sec != audioSettings.crossfadeSeconds) {
+                                    onUpdateAudioSettings(audioSettings.copy(crossfadeSeconds = sec))
+                                }
+                            },
+                            valueRange = 0f..12f,
+                            steps = 11,
+                            colors = SliderDefaults.colors(
+                                thumbColor = CopperAmber,
+                                activeTrackColor = CopperAmber
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_crossfade_slider")
+                        )
+                    }
                 }
             }
 

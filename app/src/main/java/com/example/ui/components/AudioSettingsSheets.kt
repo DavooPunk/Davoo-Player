@@ -761,7 +761,44 @@ fun EqualizerAndDspSheet(
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Crossfade entre canciones", style = MaterialTheme.typography.bodyMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Crossfade entre canciones", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = if (draftSettings.crossfadeSeconds > 0) {
+                                "Mezcla continua con solapamiento real de ${draftSettings.crossfadeSeconds} s"
+                            } else {
+                                "Desactivado · Cambio directo según modo Gapless"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = if (draftSettings.crossfadeSeconds == 0) "Off" else "${draftSettings.crossfadeSeconds} s",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (draftSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Slider(
+                    value = draftSettings.crossfadeSeconds.toFloat().coerceIn(0f, 12f),
+                    onValueChange = { raw ->
+                        val sec = raw.roundToInt().coerceIn(0, 12)
+                        commitDrag(draftSettings.copy(crossfadeSeconds = sec))
+                    },
+                    onValueChangeFinished = { commitImmediate(draftSettings) },
+                    valueRange = 0f..12f,
+                    steps = 11,
+                    colors = SliderDefaults.colors(
+                        thumbColor = CopperAmber,
+                        activeTrackColor = CopperAmber
+                    ),
+                    modifier = Modifier.testTag("crossfade_slider")
+                )
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(listOf(0, 2, 5, 8, 12)) { sec ->
                         FilterChip(

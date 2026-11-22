@@ -109,6 +109,7 @@ fun AlbumsScreen(
     onShowLyrics: (AudioTrack) -> Unit = {},
     onEditTags: (AudioTrack) -> Unit = {},
     onShowMetadata: (AudioTrack) -> Unit = {},
+    onDeleteTrack: ((AudioTrack) -> Unit)? = null,
     onToggleFolderExclude: (folderName: String, currentlyExcluded: Boolean) -> Unit = { _, _ -> },
     onOpenGlobalSearch: () -> Unit = {},
     requestedArtistName: String? = null,
@@ -227,7 +228,8 @@ fun AlbumsScreen(
                             onShowMetadata = { onShowMetadata(track) },
                             onToggleFavorite = { onToggleFavorite(track) },
                             onShowLyrics = { onShowLyrics(track) },
-                            onEditTags = { onEditTags(track) }
+                            onEditTags = { onEditTags(track) },
+                            onDeleteFromDevice = onDeleteTrack?.let { cb -> { cb(track) } }
                         )
                     }
                 }
@@ -670,7 +672,8 @@ fun AlbumDetailScreen(
     onToggleFavorite: (AudioTrack) -> Unit = {},
     onShowLyrics: (AudioTrack) -> Unit = {},
     onEditTags: (AudioTrack) -> Unit = {},
-    onShowMetadata: (AudioTrack) -> Unit = {}
+    onShowMetadata: (AudioTrack) -> Unit = {},
+    onDeleteTrack: ((AudioTrack) -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -775,7 +778,8 @@ fun AlbumDetailScreen(
                         onShowMetadata = { onShowMetadata(track) },
                         onToggleFavorite = { onToggleFavorite(track) },
                         onShowLyrics = { onShowLyrics(track) },
-                        onEditTags = { onEditTags(track) }
+                        onEditTags = { onEditTags(track) },
+                        onDeleteFromDevice = onDeleteTrack?.let { cb -> { cb(track) } }
                     )
                 }
             }

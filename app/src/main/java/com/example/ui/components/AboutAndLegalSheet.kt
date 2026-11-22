@@ -139,8 +139,20 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.3",
+        version = "v2.0.4",
         tag = "Actual",
+        items = listOf(
+            "Crossfade real entre canciones (0 a 12 s): transición solapada de doble canal con curva equal-power para mantener volumen constante, ecualizador/balance independientes, soporte ReplayGain y control continuo desde Ajustes y Ecualizador.",
+            "Colores adaptativos en Letras y Traducción: el menú de letras, su degradado de fondo, la línea traducida activa, la barra de progreso y los menús flotantes de traducción (DeepL/Google e idiomas) y gestión .lrc ahora usan el color dinámico extraído de la carátula de la canción en reproducción.",
+            "Carátulas Deezer y avatar Last.fm mejorados: búsqueda flexible tolerante a colaboraciones (artistas separados por coma, & o feat.) con respaldo en búsqueda abierta, URLs HTTPS seguras y carga de foto de perfil en user.getInfo.",
+            "Ir a la canción actual y cola reorganizada: nuevo botón de ubicación en Tu Música para saltar directo a la pista en reproducción; la cola ahora fija siempre la canción actual arriba («Sonando ahora»), muestra solo las siguientes con reordenamiento arrastrando y botón rápido para volver arriba.",
+            "Eliminación física real de canciones del dispositivo (individual y por lotes) compatible con Android 10–15+ (MediaStore y tarjetas SD / SAF), limpiando automáticamente la cola, listas, letras, estadísticas y biblioteca sin re-escanear.",
+            "Renombrado físico y escritura real de etiquetas: edita el nombre del archivo conservando la extensión y guarda etiquetas ID3v2 (MP3), Vorbis Comment (FLAC) y MediaStore directamente en disco con refresco vía MediaScannerConnection."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.3",
+        tag = "Anterior",
         items = listOf(
             "Integración completa con Last.fm: flujo OAuth seguro con callback davooplayer://lastfm-callback, firma MD5 nativa (api_sig) y gestión de API Key / Shared Secret en Opciones o Perfil.",
             "Nueva pestaña Perfil Last.fm con Top Canciones (7 días, 1 mes, 12 meses y siempre), Favoritas y Historial Reciente destacando la pista en reproducción actual.",
@@ -499,30 +511,36 @@ private fun LegalDocumentsSection() {
     ExpandableLegalCard(
         icon = Icons.Rounded.Lock,
         title = "Política de Privacidad",
-        summary = "100% sin conexión · Cero recopilación de datos personales",
+        summary = "Offline por defecto · Integraciones opcionales (Last.fm, Deezer, letras)",
         testTag = "legal_privacy_card",
         initiallyExpanded = true,
         body = """
-            Esta aplicación no recopila ni comparte datos personales.
+            Davoo Player funciona de forma local y privada por defecto. Cualquier conexión a servicios externos es opcional o se activa únicamente bajo tu solicitud.
 
             1. Almacenamiento local y procesamiento en el dispositivo:
-            Davoo Player funciona completamente en tu dispositivo. Tus canciones, carátulas, listas de reproducción (.m3u), letras guardadas (.lrc), historial de escucha y ajustes de ecualización permanecen únicamente en la memoria privada de tu teléfono o en las carpetas que tú autorices.
+            Tus canciones, carátulas, listas de reproducción (.m3u), letras guardadas (.lrc), historial local y ajustes de ecualización permanecen únicamente en la memoria privada de tu teléfono o en las carpetas que tú autorices.
 
-            2. Cumplimiento GDPR / CCPA:
-            Al no existir cuentas de usuario, servidores propios, rastreadores publicitarios ni telemetría analítica, no vendemos, alquilamos ni transferimos información personal a terceros.
+            2. Sin servidores propios ni telemetría (GDPR / CCPA):
+            DavooPunk no opera servidores propios, rastreadores publicitarios ni telemetría analítica; no vendemos, alquilamos ni transferimos información personal a terceros.
 
-            3. Búsqueda y traducción opcional de letras:
-            Solo cuando pulsas manualmente buscar o traducir letras, la aplicación envía únicamente el título, artista o texto de la letra a LRCLIB, DeepL o Google Traductor (según el motor que elijas), sin enviar identificadores personales ni del dispositivo.
+            3. Integración opcional con Last.fm (OAuth):
+            Solo si decides conectar tu cuenta en Opciones o Perfil Last.fm, se abre la autorización oficial de Last.fm y se guardan localmente tu nombre de usuario y session_key para enviar Now Playing, scrobbles, gestionar Favoritas (track.love/unlove) y consultar tus estadísticas (topTracks, lovedTracks, recentTracks e info de perfil). Puedes cerrar sesión en cualquier momento para borrar esos datos locales y revocar el acceso.
 
-            4. Permisos del sistema:
-            Los permisos de lectura de audio y acceso mediante Selector del Sistema (SAF / Tarjeta SD) se usan exclusivamente para descubrir y reproducir tus archivos locales.
+            4. Enriquecimiento anónimo con Deezer API:
+            Al abrir la pestaña Perfil Last.fm, la app consulta de forma anónima la API pública de Deezer enviando únicamente título y artista para obtener carátulas HD y vistas previas de 30 segundos, sin enviar identificadores personales ni del dispositivo.
+
+            5. Letras, traducción opcional y comprobación de actualizaciones:
+            Solo cuando pulsas manualmente buscar o traducir letras, se envía el título, artista o texto a LRCLIB, DeepL o Google Traductor. Si activas o pulsas comprobar actualizaciones, la app consulta la API pública de GitHub Releases.
+
+            6. Permisos del sistema:
+            Los permisos de lectura de audio, Selector del Sistema (SAF / Tarjeta SD) y confirmaciones del sistema (MediaStore) se utilizan exclusivamente para reproducir, editar etiquetas, renombrar o eliminar archivos locales bajo tu autorización.
         """.trimIndent()
     )
 
     ExpandableLegalCard(
         icon = Icons.Rounded.Gavel,
         title = "Términos y Condiciones de Uso",
-        summary = "Software libre (MIT), uso responsable y garantía tal cual",
+        summary = "Software libre (MIT), APIs de terceros y uso responsable",
         testTag = "legal_terms_card",
         initiallyExpanded = false,
         body = """
@@ -532,9 +550,12 @@ private fun LegalDocumentsSection() {
             Davoo Player es software de código abierto publicado bajo la Licencia MIT. Puedes usar, estudiar, modificar y redistribuir el código fuente conservando el aviso de derechos de autor original y el texto de la licencia MIT.
 
             2. Uso lícito:
-            Eres responsable de utilizar la aplicación respetando la legislación vigente y los derechos de propiedad intelectual de los archivos de audio que reproduzcas.
+            Eres responsable de utilizar la aplicación respetando la legislación vigente y los derechos de propiedad intelectual de los archivos de audio que reproduzcas, edites o administres.
 
-            3. Disponibilidad y garantía:
+            3. Servicios y APIs de terceros (no afiliación):
+            Las funciones opcionales conectadas a Last.fm, Deezer API, LRCLIB, DeepL, Google Traductor y GitHub dependen de servicios externos sujetos a sus propios términos y disponibilidad. Davoo Player es un proyecto independiente sin afiliación, patrocinio ni respaldo oficial por parte de dichas plataformas.
+
+            4. Disponibilidad y garantía:
             El software se entrega "tal cual" (as-is), sin garantías expresas ni implícitas. El autor y colaboradores pueden actualizar funciones o publicar nuevas versiones en cualquier momento.
         """.trimIndent()
     )
@@ -542,19 +563,22 @@ private fun LegalDocumentsSection() {
     ExpandableLegalCard(
         icon = Icons.Rounded.Shield,
         title = "Descargo de Responsabilidad (Copyright / DMCA)",
-        summary = "Herramienta local de reproducción · Sin contenido alojado",
+        summary = "Reproductor local · Vistas previas transmitidas desde API pública",
         testTag = "legal_dmca_card",
         initiallyExpanded = false,
         body = """
-            Davoo Player es exclusivamente una herramienta técnica para reproducir archivos de audio almacenados localmente por el usuario.
+            Davoo Player es exclusivamente una herramienta técnica para reproducir y organizar archivos de audio almacenados localmente por el usuario.
 
             1. Cero contenido alojado o distribuido:
-            La aplicación no incluye, aloja, indexa ni distribuye música protegida, y no promueve ni facilita la piratería ni la descarga ilegal de material con derechos de autor.
+            La aplicación no incluye, aloja ni distribuye música protegida, y no promueve ni facilita la piratería ni la descarga ilegal de material con derechos de autor.
 
-            2. Responsabilidad exclusiva del usuario:
+            2. Vistas previas y carátulas de Deezer API:
+            Las carátulas y fragmentos de vista previa de 30 segundos disponibles en la pestaña Perfil Last.fm se transmiten directamente desde la API pública oficial de Deezer bajo demanda del usuario, sin almacenar ni redistribuir obras completas dentro de la app.
+
+            3. Responsabilidad exclusiva del usuario:
             El usuario es el único responsable de contar con los derechos legales, licencias o autorizaciones correspondientes sobre cualquier archivo MP3, FLAC, WAV, AAC u OGG que reproduzca o administre en la aplicación.
 
-            3. Consultas DMCA o propiedad intelectual:
+            4. Consultas DMCA o propiedad intelectual:
             Para cualquier notificación relacionada con derechos de autor, escribe a $SUPPORT_EMAIL.
         """.trimIndent()
     )

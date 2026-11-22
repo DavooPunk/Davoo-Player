@@ -4,7 +4,27 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.3 (Actual — Compilación 8)
+## v2.0.4 (Actual — Compilación 9)
+
+### Crossfade Real y Colores Adaptativos en Letras
+- **Crossfade configurable entre canciones (0 a 12 s)**: reproducción solapada de doble canal mediante curva *equal-power* para mantener el volumen constante, ecualizador/balance DSP aplicados en la mezcla, respeto por etiquetas ReplayGain y control continuo desde *Opciones* y *Ecualizador*.
+- **Colores adaptativos en Letras y Traducción**: el visor de letras, el degradado de fondo, la línea traducida activa, la barra de progreso y los menús flotantes rápidos de traducción (*DeepL / Google*, selector de idioma) y gestión `.lrc` ahora adoptan automáticamente el color dinámico extraído de la carátula de la canción en reproducción.
+
+### Enriquecimiento Deezer y Avatar Last.fm
+- **Búsqueda flexible en Deezer (`buscarEnDeezer`)**: tolerante a múltiples artistas y colaboraciones (comas `,`, `&`, `feat.` / `ft.`) con respaldo automático mediante búsqueda abierta, conversión forzada a `https://`, actualización reactiva inmediata en lista y reproducción de vistas previas de 30 segundos.
+- **Avatar real en Perfil Last.fm**: consulta adicional a `user.getInfo` para mostrar la foto de perfil del usuario en el círculo superior con respaldo del icono de disco si no tiene avatar.
+
+### Navegación en Biblioteca y Cola Reorganizada
+- **Botón *"Ir a la canción actual"* en Tu Música**: acceso compacto junto al botón de selección múltiple (visible cuando la pista activa está en la lista filtrada) para desplazarse con animación directamente hasta la canción que está sonando.
+- **Cola de reproducción centrada en lo actual y siguiente**: fija siempre en primera posición la pista en reproducción (*«SONANDO AHORA»*), muestra únicamente las pistas siguientes con reordenamiento por arrastre (`drag & drop`), ajusta automáticamente los índices al seleccionar o quitar canciones y añade un botón rápido en la cabecera para volver suavemente arriba.
+
+### Gestión Física de Archivos y Etiquetas en Disco
+- **Eliminar canciones físicamente del dispositivo (individual y por lotes)**: disponible tanto desde el menú contextual de cada pista como desde la selección múltiple con diálogo de confirmación. Implementado con Scoped Storage para Android 10–15+ (`MediaStore.createDeleteRequest`, `RecoverableSecurityException` y `DocumentsContract`), sincronizando al instante la cola y limpiando biblioteca, estadísticas, playlists, overrides y letras sin re-escaneo completo.
+- **Renombrado físico y escritura real de etiquetas**: nuevo campo de nombre de archivo dentro del editor de etiquetas (conservando la extensión original y bloqueando caracteres inválidos), escritura binaria directa en disco de etiquetas ID3v2.3 (MP3, preservando letras `USLT` y portadas `APIC`) y Vorbis Comment / `PICTURE` (FLAC, preservando `STREAMINFO` y `LYRICS`), actualización de columnas en `MediaStore`, flujo de permiso de escritura del sistema, indexación mediante `MediaScannerConnection` y refresco inmediato en la app.
+
+---
+
+## v2.0.3 (Compilación 8)
 
 ### Integración con Last.fm y Scrobbling en Vivo
 - **Autenticación OAuth nativa**: botón *"Conectar con Last.fm"* en *Opciones* y en la nueva pestaña *Last.fm*, con apertura en navegador externo, callback `davooplayer://lastfm-callback`, firma MD5 nativa (`MessageDigest`) sin librerías externas y persistencia segura de sesión (`lfm_session_key`, `lfm_username`).

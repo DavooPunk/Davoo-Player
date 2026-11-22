@@ -54,6 +54,7 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Person
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -115,6 +117,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.example.R
 import com.example.data.repository.LrcLibLyricsFetcher
+import com.example.data.repository.PhysicalTagEditOutcome
+import com.example.data.repository.TrackTagEditRequest
 import com.example.model.AudioFormat
 import com.example.model.AudioTrack
 import com.example.model.AudioTrackMetadata
@@ -257,7 +261,10 @@ fun SonoraApp(
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var pendingTracksForNewPlaylist by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
     var tracksToAddToPlaylist by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
-    var pendingMediaStoreDeleteCount by remember { mutableStateOf(0) }
+    var pendingMediaStoreDeleteTracks by remember { mutableStateOf<List<AudioTrack>>(emptyList()) }
+    var pendingMediaStoreDeleteRequiresRetryAfterPerm by remember { mutableStateOf(false) }
+    var pendingTagWriteRequest by remember { mutableStateOf<TrackTagEditRequest?>(null) }
+    var singleTrackPendingDeleteConfirm by remember { mutableStateOf<AudioTrack?>(null) }
     var showQueueSheet by remember { mutableStateOf(false) }
     var showEqualizerSheet by remember { mutableStateOf(false) }
     var showSleepTimerSheet by remember { mutableStateOf(false) }
@@ -378,16 +385,59 @@ fun SonoraApp(
     val deleteTracksLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        val count = pendingMediaStoreDeleteCount
-        pendingMediaStoreDeleteCount = 0
+        val targets = pendingMediaStoreDeleteTracks
+        val needsRetry = pendingMediaStoreDeleteRequiresRetryAfterPerm
+        pendingMediaStoreDeleteTracks = emptyList()
+        pendingMediaStoreDeleteRequiresRetryAfterPerm = false
         if (result.resultCode == Activity.RESULT_OK) {
-            viewModel.refreshLibrary()
-            viewModel.notifyMessage(
-                if (count == 1) "Canción eliminada del dispositivo"
-                else "$count canciones eliminadas del dispositivo"
-            )
+            if (needsRetry && targets.isNotEmpty()) {
+                coroutineScope.launch {
+                    val targetIds = targets.mapTo(HashSet()) { it.id }
+                    if (playbackState.currentTrack?.id in targetIds) {
+                        viewModel.removeTracksFromPlaybackQueue(targetIds)
+                    }
+                    val deletedNow = withContext(Dispatchers.IO) {
+                        targets.filter { track ->
+                            val uri = runCatching { Uri.parse(track.contentUri) }.getOrNull() ?: return@filter false
+                            runCatching { context.contentResolver.delete(uri, null, null) > 0 }.getOrDefault(false)
+                        }
+                    }
+                    if (deletedNow.isNotEmpty()) {
+                        viewModel.onPhysicalTracksDeleted(
+                            deletedNow,
+                            if (deletedNow.size == 1) "Canción eliminada del dispositivo"
+                            else "${deletedNow.size} canciones eliminadas del dispositivo"
+                        )
+                    } else {
+                        viewModel.notifyMessage("No se pudieron eliminar las canciones seleccionadas")
+                    }
+                }
+            } else if (targets.isNotEmpty()) {
+                viewModel.onPhysicalTracksDeleted(
+                    targets,
+                    if (targets.size == 1) "Canción eliminada del dispositivo"
+                    else "${targets.size} canciones eliminadas del dispositivo"
+                )
+            }
         } else {
             viewModel.notifyMessage("Eliminación cancelada")
+        }
+    }
+
+    val writeTagsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val pendingReq = pendingTagWriteRequest
+        pendingTagWriteRequest = null
+        if (result.resultCode == Activity.RESULT_OK && pendingReq != null) {
+            coroutineScope.launch {
+                val outcome = viewModel.commitPhysicalTagEdit(pendingReq)
+                if (outcome is PhysicalTagEditOutcome.NeedsWritePermission) {
+                    viewModel.notifyMessage("No se obtuvo permiso para modificar este archivo en disco")
+                }
+            }
+        } else if (pendingReq != null) {
+            viewModel.notifyMessage("Edición de etiquetas cancelada")
         }
     }
 
@@ -395,84 +445,130 @@ fun SonoraApp(
         val safTracks = tracks.filter { it.isSafImported }
         val sdTreeTracks = tracks.filter { it.isDocumentTreeTrack }
         val mediaStoreTracks = tracks.filterNot { it.isSafImported || it.isDocumentTreeTrack }
-        if (safTracks.isNotEmpty()) {
-            viewModel.removeImportedTracks(safTracks, showFeedback = mediaStoreTracks.isEmpty() && sdTreeTracks.isEmpty())
-        }
-        if (sdTreeTracks.isNotEmpty()) {
+
+        if (safTracks.isNotEmpty() || sdTreeTracks.isNotEmpty()) {
             coroutineScope.launch {
-                var deletedSd = 0
+                val releaseIds = (safTracks + sdTreeTracks).mapTo(HashSet()) { it.id }
+                if (playbackState.currentTrack?.id in releaseIds) {
+                    viewModel.removeTracksFromPlaybackQueue(releaseIds)
+                }
+
+                val physicallyDeletedSaf = mutableListOf<AudioTrack>()
+                val removeOnlySaf = mutableListOf<AudioTrack>()
+                val deletedSd = mutableListOf<AudioTrack>()
+
                 withContext(Dispatchers.IO) {
+                    for (safTrack in safTracks) {
+                        val uri = runCatching { Uri.parse(safTrack.contentUri) }.getOrNull()
+                        val deleted = if (uri != null) {
+                            runCatching {
+                                android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+                            }.getOrElse {
+                                runCatching { context.contentResolver.delete(uri, null, null) > 0 }.getOrDefault(false)
+                            }
+                        } else false
+                        if (deleted) physicallyDeletedSaf += safTrack else removeOnlySaf += safTrack
+                    }
                     for (sdTrack in sdTreeTracks) {
-                        val deleted = runCatching {
-                            android.provider.DocumentsContract.deleteDocument(
-                                context.contentResolver,
-                                Uri.parse(sdTrack.contentUri)
-                            )
-                        }.getOrDefault(false)
-                        if (deleted) deletedSd++
+                        val uri = runCatching { Uri.parse(sdTrack.contentUri) }.getOrNull()
+                        val deleted = if (uri != null) {
+                            runCatching {
+                                android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+                            }.getOrDefault(false)
+                        } else false
+                        if (deleted) deletedSd += sdTrack
                     }
                 }
-                if (deletedSd > 0) {
-                    viewModel.refreshLibrary()
-                    if (mediaStoreTracks.isEmpty()) {
-                        viewModel.notifyMessage(
-                            if (deletedSd == 1) "Canción eliminada de la tarjeta SD"
-                            else "$deletedSd canciones eliminadas de la tarjeta SD"
-                        )
+
+                val totalDeleted = physicallyDeletedSaf + deletedSd
+                if (totalDeleted.isNotEmpty()) {
+                    val msg = if (mediaStoreTracks.isEmpty() && removeOnlySaf.isEmpty()) {
+                        if (deletedSd.isNotEmpty() && physicallyDeletedSaf.isEmpty()) {
+                            if (deletedSd.size == 1) "Canción eliminada de la tarjeta SD"
+                            else "${deletedSd.size} canciones eliminadas de la tarjeta SD"
+                        } else {
+                            if (totalDeleted.size == 1) "Canción eliminada del dispositivo"
+                            else "${totalDeleted.size} canciones eliminadas del dispositivo"
+                        }
+                    } else null
+                    viewModel.onPhysicalTracksDeleted(totalDeleted, msg)
+                }
+
+                if (removeOnlySaf.isNotEmpty()) {
+                    viewModel.removeImportedTracks(removeOnlySaf, showFeedback = false)
+                    if (totalDeleted.isEmpty() && mediaStoreTracks.isEmpty()) {
+                        viewModel.notifyMessage("Quitada de la biblioteca (el proveedor no permite borrado físico)")
                     }
-                } else if (mediaStoreTracks.isEmpty() && safTracks.isEmpty()) {
+                } else if (sdTreeTracks.isNotEmpty() && deletedSd.isEmpty() && physicallyDeletedSaf.isEmpty() && mediaStoreTracks.isEmpty()) {
                     viewModel.notifyMessage("Android no permitió eliminar archivos de esta tarjeta SD (solo lectura)")
                 }
             }
         }
+
         if (mediaStoreTracks.isNotEmpty()) {
-            val uris = mediaStoreTracks.mapNotNull { runCatching { Uri.parse(it.contentUri) }.getOrNull() }
-            if (uris.isNotEmpty()) {
+            val validPairs = mediaStoreTracks.mapNotNull { track ->
+                runCatching { Uri.parse(track.contentUri) }.getOrNull()?.let { uri -> track to uri }
+            }
+            if (validPairs.isNotEmpty()) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     val launched = runCatching {
-                        val pendingIntent = MediaStore.createDeleteRequest(context.contentResolver, uris)
-                        pendingMediaStoreDeleteCount = uris.size
+                        val pendingIntent = MediaStore.createDeleteRequest(
+                            context.contentResolver,
+                            validPairs.map { it.second }
+                        )
+                        pendingMediaStoreDeleteTracks = validPairs.map { it.first }
+                        pendingMediaStoreDeleteRequiresRetryAfterPerm = false
                         deleteTracksLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
                     }.isSuccess
                     if (!launched) {
-                        pendingMediaStoreDeleteCount = 0
+                        pendingMediaStoreDeleteTracks = emptyList()
+                        pendingMediaStoreDeleteRequiresRetryAfterPerm = false
                         viewModel.notifyMessage("No se pudo abrir el diálogo de eliminación del sistema")
                     }
                 } else {
                     coroutineScope.launch {
-                        var deleted = 0
+                        val msIds = validPairs.mapTo(HashSet()) { it.first.id }
+                        if (playbackState.currentTrack?.id in msIds) {
+                            viewModel.removeTracksFromPlaybackQueue(msIds)
+                        }
+                        val deletedNow = mutableListOf<AudioTrack>()
+                        val remainingForPerm = mutableListOf<AudioTrack>()
                         var recoverableSender: android.content.IntentSender? = null
                         withContext(Dispatchers.IO) {
-                            for (uri in uris) {
+                            for ((track, uri) in validPairs) {
                                 try {
                                     if (context.contentResolver.delete(uri, null, null) > 0) {
-                                        deleted++
+                                        deletedNow += track
                                     }
                                 } catch (e: SecurityException) {
                                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                                        e is RecoverableSecurityException &&
-                                        recoverableSender == null
+                                        e is RecoverableSecurityException
                                     ) {
-                                        recoverableSender = e.userAction.actionIntent.intentSender
+                                        remainingForPerm += track
+                                        if (recoverableSender == null) {
+                                            recoverableSender = e.userAction.actionIntent.intentSender
+                                        }
                                     }
                                 } catch (_: Throwable) {
                                     // Skip invalid or unmounted volume URIs safely
                                 }
                             }
                         }
-                        if (deleted > 0) {
-                            viewModel.refreshLibrary()
+                        if (deletedNow.isNotEmpty()) {
+                            viewModel.onPhysicalTracksDeleted(
+                                deletedNow,
+                                message = if (recoverableSender == null) {
+                                    if (deletedNow.size == 1) "Canción eliminada del dispositivo"
+                                    else "${deletedNow.size} canciones eliminadas del dispositivo"
+                                } else null
+                            )
                         }
                         val sender = recoverableSender
-                        if (sender != null) {
-                            pendingMediaStoreDeleteCount = uris.size - deleted
+                        if (sender != null && remainingForPerm.isNotEmpty()) {
+                            pendingMediaStoreDeleteTracks = remainingForPerm
+                            pendingMediaStoreDeleteRequiresRetryAfterPerm = true
                             deleteTracksLauncher.launch(IntentSenderRequest.Builder(sender).build())
-                        } else if (deleted > 0) {
-                            viewModel.notifyMessage(
-                                if (deleted == 1) "Canción eliminada del dispositivo"
-                                else "$deleted canciones eliminadas del dispositivo"
-                            )
-                        } else if (safTracks.isEmpty() && sdTreeTracks.isEmpty()) {
+                        } else if (deletedNow.isEmpty() && safTracks.isEmpty() && sdTreeTracks.isEmpty()) {
                             viewModel.notifyMessage("No se pudieron eliminar las canciones seleccionadas")
                         }
                     }
@@ -875,6 +971,7 @@ fun SonoraApp(
                                     tagEditorTargetTrack = track
                                 },
                                 onShowMetadata = { track -> metadataTargetTrack = track },
+                                onDeleteTrack = { track -> singleTrackPendingDeleteConfirm = track },
                                 onToggleFolderExclude = viewModel::toggleFolderExclusion,
                                 onOpenGlobalSearch = viewModel::openGlobalSearch,
                                 requestedArtistName = requestedArtistDrilldown,
@@ -909,7 +1006,8 @@ fun SonoraApp(
                                     pickedCustomCoverUri = null
                                     tagEditorTargetTrack = track
                                 },
-                                onShowMetadata = { track -> metadataTargetTrack = track }
+                                onShowMetadata = { track -> metadataTargetTrack = track },
+                                onDeleteTrack = { track -> singleTrackPendingDeleteConfirm = track }
                             )
                         }
 
@@ -974,7 +1072,8 @@ fun SonoraApp(
                                     tagEditorTargetTrack = track
                                 },
                                 onShowMetadata = { track -> metadataTargetTrack = track },
-                                bottomContentPadding = bottomContentPadding
+                                bottomContentPadding = bottomContentPadding,
+                                onDeleteTrack = { track -> singleTrackPendingDeleteConfirm = track }
                             )
                         }
 
@@ -1017,7 +1116,8 @@ fun SonoraApp(
                                 bottomContentPadding = bottomContentPadding,
                                 onShowMetadata = { track -> metadataTargetTrack = track },
                                 onRemoveTracks = viewModel::removeTracksFromPlaylist,
-                                onAddTracksToOtherPlaylist = { tracks -> tracksToAddToPlaylist = tracks }
+                                onAddTracksToOtherPlaylist = { tracks -> tracksToAddToPlaylist = tracks },
+                                onDeleteTrack = { track -> singleTrackPendingDeleteConfirm = track }
                             )
                         }
 
@@ -1131,7 +1231,8 @@ fun SonoraApp(
                             onOpenPlaylist = { playlistId ->
                                 viewModel.closeGlobalSearch()
                                 navController.navigate(Route.PlaylistDetail(playlistId))
-                            }
+                            },
+                            onDeleteTrack = { track -> singleTrackPendingDeleteConfirm = track }
                         )
                     }
                 }
@@ -1182,7 +1283,8 @@ fun SonoraApp(
             playbackState = playbackState,
             onDismiss = { showQueueSheet = false },
             onSelectIndex = viewModel::skipToQueueIndex,
-            onRemoveIndex = viewModel::removeFromQueue
+            onRemoveIndex = viewModel::removeFromQueue,
+            onMoveItem = viewModel::moveQueueItem
         )
     }
 
@@ -1328,11 +1430,13 @@ fun SonoraApp(
             isPlaying = isCurrentTrack && playbackState.isPlaying,
             onTogglePlayPause = if (isCurrentTrack) {
                 viewModel::togglePlayPause
-            } else null
+            } else null,
+            dynamicArtworkColorsEnabled = audioSettings.dynamicArtworkColors,
+            dynamicAccentColor = if (isCurrentTrack) dynamicBottomBarAccent else null
         )
     }
 
-    // In-app Tag & Cover Editor sheet (uses zero-permission Photo Picker)
+    // In-app Tag, Filename & Cover Editor sheet (uses zero-permission Photo Picker)
     tagEditorTargetTrack?.let { target ->
         TagEditorBottomSheet(
             track = target,
@@ -1343,9 +1447,10 @@ fun SonoraApp(
                 )
             },
             onClearCustomCover = { pickedCustomCoverUri = null },
-            onSave = { title, artist, album, albumArtist, genre, year, trackNum, artworkUri ->
-                viewModel.saveTrackTagOverride(
-                    trackId = target.id,
+            onSave = { fileNameBase, title, artist, album, albumArtist, genre, year, trackNum, artworkUri ->
+                val request = TrackTagEditRequest(
+                    track = target,
+                    newFileNameBase = fileNameBase,
                     title = title,
                     artist = artist,
                     album = album,
@@ -1355,10 +1460,63 @@ fun SonoraApp(
                     trackNumber = trackNum,
                     customArtworkUri = artworkUri
                 )
+                coroutineScope.launch {
+                    val outcome = viewModel.commitPhysicalTagEdit(request)
+                    if (outcome is PhysicalTagEditOutcome.NeedsWritePermission) {
+                        pendingTagWriteRequest = request
+                        val launched = runCatching {
+                            writeTagsLauncher.launch(IntentSenderRequest.Builder(outcome.intentSender).build())
+                        }.isSuccess
+                        if (!launched) {
+                            pendingTagWriteRequest = null
+                            viewModel.notifyMessage("No se pudo abrir la solicitud de permiso de escritura")
+                        }
+                    }
+                }
             },
             onDismiss = {
                 tagEditorTargetTrack = null
                 pickedCustomCoverUri = null
+            }
+        )
+    }
+
+    // Physical single-track delete confirmation dialog for collection, playlist, & global search views
+    singleTrackPendingDeleteConfirm?.let { target ->
+        AlertDialog(
+            onDismissRequest = { singleTrackPendingDeleteConfirm = null },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.DeleteForever,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("¿Eliminar del dispositivo?") },
+            text = {
+                Text(
+                    "Se eliminará permanentemente «${target.title}» del almacenamiento del dispositivo y se quitará de la cola y listas de reproducción. Esta acción no se puede deshacer."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        singleTrackPendingDeleteConfirm = null
+                        handleBatchDeleteTracks(listOf(target))
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ),
+                    modifier = Modifier.testTag("confirm_global_single_delete_button")
+                ) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { singleTrackPendingDeleteConfirm = null }) {
+                    Text("Cancelar")
+                }
             }
         )
     }
@@ -1545,7 +1703,8 @@ fun GlobalSearchOverlay(
     onShowMetadata: (AudioTrack) -> Unit,
     onOpenAlbum: (String) -> Unit,
     onOpenArtist: (String) -> Unit,
-    onOpenPlaylist: (Long) -> Unit
+    onOpenPlaylist: (Long) -> Unit,
+    onDeleteTrack: (AudioTrack) -> Unit = {}
 ) {
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -1934,7 +2093,8 @@ fun GlobalSearchOverlay(
                                 onShowMetadata = { onShowMetadata(track) },
                                 onToggleFavorite = { onToggleFavorite(track) },
                                 onShowLyrics = { onShowLyrics(track) },
-                                onEditTags = { onEditTags(track) }
+                                onEditTags = { onEditTags(track) },
+                                onDeleteFromDevice = { onDeleteTrack(track) }
                             )
                         }
                     }

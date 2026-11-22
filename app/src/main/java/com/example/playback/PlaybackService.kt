@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -52,7 +53,65 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.sin
+
+object CrossfadeMath {
+    fun equalPowerGains(progress: Float): Pair<Float, Float> {
+        val p = progress.coerceIn(0f, 1f)
+        val theta = p * (PI / 2.0)
+        val outgoing = cos(theta).toFloat().coerceIn(0f, 1f)
+        val incoming = sin(theta).toFloat().coerceIn(0f, 1f)
+        return outgoing to incoming
+    }
+
+    fun shouldTriggerCrossfade(
+        crossfadeSeconds: Int,
+        durationMs: Long,
+        positionMs: Long,
+        hasNextItem: Boolean,
+        repeatMode: Int,
+        playbackSpeed: Float,
+        stopAfterCurrentTrack: Boolean,
+        alreadyTransitioning: Boolean
+    ): Boolean {
+        if (crossfadeSeconds <= 0 ||
+            !hasNextItem ||
+            repeatMode == Player.REPEAT_MODE_ONE ||
+            stopAfterCurrentTrack ||
+            alreadyTransitioning ||
+            durationMs <= 0L ||
+            positionMs < 0L
+        ) {
+            return false
+        }
+        val speed = playbackSpeed.coerceAtLeast(0.5f)
+        val fadeWallMs = crossfadeSeconds * 1000L
+        val totalWallMs = (durationMs / speed).toLong()
+        if (totalWallMs <= fadeWallMs * 2L) return false
+        val remainingWallMs = ((durationMs - positionMs) / speed).toLong()
+        return remainingWallMs in 1L..fadeWallMs
+    }
+
+    fun computeMonitorDelayMs(
+        crossfadeSeconds: Int,
+        durationMs: Long,
+        positionMs: Long,
+        playbackSpeed: Float
+    ): Long {
+        if (crossfadeSeconds <= 0 || durationMs <= 0L) return 1_500L
+        val speed = playbackSpeed.coerceAtLeast(0.5f)
+        val fadeWallMs = crossfadeSeconds * 1000L
+        val remainingWallMs = ((durationMs - positionMs).coerceAtLeast(0L) / speed).toLong()
+        return if (remainingWallMs > fadeWallMs) {
+            (remainingWallMs - fadeWallMs - 100L).coerceIn(80L, 2_500L)
+        } else {
+            100L
+        }
+    }
+}
 
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
@@ -63,13 +122,24 @@ class PlaybackService : MediaLibraryService() {
     private val effectsController = AudioEffectsController()
     private val tenBandEqProcessor = TenBandEqualizerAudioProcessor()
     private val stereoBalanceProcessor = StereoBalanceAudioProcessor()
+    private val outgoingEqProcessor = TenBandEqualizerAudioProcessor()
+    private val outgoingBalanceProcessor = StereoBalanceAudioProcessor()
+    private var outgoingPlayer: ExoPlayer? = null
+    private lateinit var mediaAudioAttributes: AudioAttributes
 
     @Volatile
     private var isServiceDestroyed: Boolean = false
     private var sessionPersistedOnStop: Boolean = false
     private var currentSettings: AudioSettings = AudioSettings()
     private var currentReplayGainMultiplier: Float = 1.0f
-    private var crossfadeJob: Job? = null
+    private var stopAfterCurrentTrack: Boolean = false
+    private var crossfadeMonitorJob: Job? = null
+    private var crossfadeFadeJob: Job? = null
+    private var activeFadeInActive: Boolean = false
+    private var isAdvancingViaCrossfade: Boolean = false
+    private var lastCrossfadeIncomingMediaId: String? = null
+    private var lastCrossfadeAdvanceAtMs: Long = 0L
+    private var lastCrossfadeSourceKey: String? = null
     private var gapPauseJob: Job? = null
     private var isInTrackGapPause: Boolean = false
     private var persistSessionJob: Job? = null
@@ -86,6 +156,7 @@ class PlaybackService : MediaLibraryService() {
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .build()
+        mediaAudioAttributes = audioAttributes
 
         val renderersFactory = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(
@@ -115,14 +186,18 @@ class PlaybackService : MediaLibraryService() {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val triggeredByCrossfade = isCrossfadeInitiatedTransition(mediaItem?.mediaId)
                 gapPauseJob?.cancel()
                 isInTrackGapPause = false
                 sessionPersistedOnStop = false
+                lastCrossfadeSourceKey = null
+                if (!triggeredByCrossfade && crossfadeFadeJob?.isActive == true) {
+                    stopCrossfadeFadeAndOutgoing(player)
+                }
                 refreshReplayGainAndVolume(player, mediaItem)
                 persistCurrentSession(player)
                 updateHomeWidgets(player)
                 if (currentSettings.crossfadeSeconds > 0 && player.isPlaying) {
-                    serviceScope.launch { fadeInPlayer(player) }
                     startCrossfadeMonitor(player)
                 } else if (shouldInsertTrackGap(reason, mediaItem, player)) {
                     scheduleTrackGapPause(player, mediaItem!!.mediaId)
@@ -144,7 +219,8 @@ class PlaybackService : MediaLibraryService() {
                     sessionPersistedOnStop = false
                     startCrossfadeMonitor(player)
                 } else {
-                    crossfadeJob?.cancel()
+                    crossfadeMonitorJob?.cancel()
+                    stopCrossfadeFadeAndOutgoing(player)
                     persistCurrentSession(player)
                 }
                 if (isPlaying || !isInTrackGapPause) {
@@ -159,6 +235,13 @@ class PlaybackService : MediaLibraryService() {
             ) {
                 sessionPersistedOnStop = false
                 persistCurrentSession(player)
+                val targetId = newPosition.mediaItem?.mediaId ?: player.currentMediaItem?.mediaId
+                if (reason == Player.DISCONTINUITY_REASON_SEEK &&
+                    !isCrossfadeInitiatedTransition(targetId) &&
+                    crossfadeFadeJob?.isActive == true
+                ) {
+                    stopCrossfadeFadeAndOutgoing(player)
+                }
                 if (player.isPlaying) {
                     startCrossfadeMonitor(player)
                 }
@@ -284,8 +367,12 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun shutdownFromTaskRemoval() {
-        crossfadeJob?.cancel()
-        crossfadeJob = null
+        crossfadeMonitorJob?.cancel()
+        crossfadeMonitorJob = null
+        crossfadeFadeJob?.cancel()
+        crossfadeFadeJob = null
+        activeFadeInActive = false
+        releaseOutgoingPlayer()
         gapPauseJob?.cancel()
         gapPauseJob = null
         isInTrackGapPause = false
@@ -334,7 +421,10 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         isServiceDestroyed = true
-        crossfadeJob?.cancel()
+        crossfadeMonitorJob?.cancel()
+        crossfadeFadeJob?.cancel()
+        activeFadeInActive = false
+        releaseOutgoingPlayer()
         gapPauseJob?.cancel()
         isInTrackGapPause = false
         persistSessionJob?.cancel()
@@ -383,12 +473,19 @@ class PlaybackService : MediaLibraryService() {
                 preampDb = safePreamp,
                 bandGainsMb = normalizedGains
             )
+            outgoingEqProcessor.updateSettings(
+                eqEnabled = normalized.eqEnabled,
+                preampDb = safePreamp,
+                bandGainsMb = normalizedGains
+            )
         }
         if (forceAll || previous.stereoBalance != safeBalance) {
             stereoBalanceProcessor.setBalance(safeBalance)
+            outgoingBalanceProcessor.setBalance(safeBalance)
         }
         if (forceAll || previous.playbackSpeed != safeSpeed) {
             runCatching { player.setPlaybackParameters(PlaybackParameters(safeSpeed)) }
+            runCatching { outgoingPlayer?.setPlaybackParameters(PlaybackParameters(safeSpeed)) }
         }
         val dspChanged = forceAll ||
             previous.bassBoostStrength != normalized.bassBoostStrength ||
@@ -405,7 +502,8 @@ class PlaybackService : MediaLibraryService() {
             if (normalized.crossfadeSeconds > 0 && runCatching { player.isPlaying }.getOrDefault(false)) {
                 startCrossfadeMonitor(player)
             } else if (normalized.crossfadeSeconds <= 0) {
-                crossfadeJob?.cancel()
+                crossfadeMonitorJob?.cancel()
+                stopCrossfadeFadeAndOutgoing(player, releaseOutgoing = true)
             }
         }
         if (forceAll || previous.replayGainEnabled != normalized.replayGainEnabled) {
@@ -460,7 +558,9 @@ class PlaybackService : MediaLibraryService() {
         if (isServiceDestroyed) return
         if (!currentSettings.replayGainEnabled || mediaItem == null) {
             currentReplayGainMultiplier = 1.0f
-            runCatching { player.volume = 1.0f }
+            if (!activeFadeInActive) {
+                runCatching { player.volume = 1.0f }
+            }
             effectsController.setTrackHasReplayGainTag(false)
             effectsController.applySettings(currentSettings)
             return
@@ -468,7 +568,9 @@ class PlaybackService : MediaLibraryService() {
         val extraGain = mediaItem.mediaMetadata.extras?.getFloat(PlaybackController.EXTRA_REPLAY_GAIN_DB, Float.NaN)
         if (extraGain != null && !extraGain.isNaN()) {
             currentReplayGainMultiplier = dbToLinear(extraGain)
-            runCatching { player.volume = currentReplayGainMultiplier }
+            if (!activeFadeInActive) {
+                runCatching { player.volume = currentReplayGainMultiplier }
+            }
             effectsController.setTrackHasReplayGainTag(true)
             effectsController.applySettings(currentSettings)
         } else {
@@ -486,7 +588,9 @@ class PlaybackService : MediaLibraryService() {
                             return@launch
                         }
                         currentReplayGainMultiplier = mult
-                        runCatching { player.volume = mult }
+                        if (!activeFadeInActive) {
+                            runCatching { player.volume = mult }
+                        }
                         effectsController.setTrackHasReplayGainTag(db != null)
                         if (player is ExoPlayer && player.audioSessionId > 0) {
                             effectsController.attachToSession(player.audioSessionId, currentSettings)
@@ -497,7 +601,9 @@ class PlaybackService : MediaLibraryService() {
                 }
             } else {
                 currentReplayGainMultiplier = 1.0f
-                runCatching { player.volume = 1.0f }
+                if (!activeFadeInActive) {
+                    runCatching { player.volume = 1.0f }
+                }
                 effectsController.setTrackHasReplayGainTag(false)
                 effectsController.applySettings(currentSettings)
             }
@@ -508,53 +614,225 @@ class PlaybackService : MediaLibraryService() {
         return 10.0.pow(db / 20.0).toFloat().coerceIn(0.25f, 1.4f)
     }
 
+    private fun isCrossfadeInitiatedTransition(mediaId: String?): Boolean {
+        if (isAdvancingViaCrossfade) return true
+        if (mediaId != null && mediaId == lastCrossfadeIncomingMediaId) {
+            return (SystemClock.elapsedRealtime() - lastCrossfadeAdvanceAtMs) <= 450L
+        }
+        return false
+    }
+
+    private fun getOrCreateOutgoingPlayer(): ExoPlayer {
+        outgoingPlayer?.let { return it }
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink {
+                return DefaultAudioSink.Builder(context)
+                    .setAudioProcessors(arrayOf(outgoingEqProcessor, outgoingBalanceProcessor))
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+            }
+        }
+        return ExoPlayer.Builder(this, renderersFactory)
+            .setAudioAttributes(mediaAudioAttributes, false)
+            .setHandleAudioBecomingNoisy(false)
+            .setWakeMode(C.WAKE_MODE_NONE)
+            .build()
+            .also { outgoingPlayer = it }
+    }
+
+    private fun stopOutgoingPlayer(player: ExoPlayer? = outgoingPlayer) {
+        if (player == null) return
+        runCatching {
+            player.playWhenReady = false
+            player.pause()
+            player.stop()
+            player.clearMediaItems()
+        }
+    }
+
+    private fun releaseOutgoingPlayer() {
+        val out = outgoingPlayer ?: return
+        outgoingPlayer = null
+        runCatching {
+            out.playWhenReady = false
+            out.stop()
+            out.release()
+        }
+    }
+
+    private fun stopCrossfadeFadeAndOutgoing(
+        mainPlayer: Player,
+        releaseOutgoing: Boolean = false
+    ) {
+        crossfadeFadeJob?.cancel()
+        crossfadeFadeJob = null
+        activeFadeInActive = false
+        if (!isServiceDestroyed) {
+            runCatching { mainPlayer.volume = currentReplayGainMultiplier }
+        }
+        if (releaseOutgoing) {
+            releaseOutgoingPlayer()
+        } else {
+            stopOutgoingPlayer()
+        }
+    }
+
     private fun startCrossfadeMonitor(player: Player) {
-        crossfadeJob?.cancel()
+        crossfadeMonitorJob?.cancel()
         val fadeSec = currentSettings.crossfadeSeconds
         if (fadeSec <= 0) {
-            runCatching { player.volume = currentReplayGainMultiplier }
+            if (!activeFadeInActive) {
+                runCatching { player.volume = currentReplayGainMultiplier }
+            }
             return
         }
-        val fadeMs = fadeSec * 1000L
-        crossfadeJob = serviceScope.launch {
+        crossfadeMonitorJob = serviceScope.launch {
             while (isActive && !isServiceDestroyed && runCatching { player.isPlaying }.getOrDefault(false)) {
+                val settingsFadeSec = currentSettings.crossfadeSeconds
+                if (settingsFadeSec <= 0) break
+
                 val duration = runCatching { player.duration }.getOrDefault(0L)
                 val pos = runCatching { player.currentPosition }.getOrDefault(0L)
                 val hasNext = runCatching { player.hasNextMediaItem() }.getOrDefault(false)
-                var nextDelayMs = 2_000L
-                if (duration > fadeMs * 2 && hasNext) {
-                    val remaining = duration - pos
-                    if (remaining in 1..fadeMs) {
-                        val factor = (remaining.toFloat() / fadeMs.toFloat()).coerceIn(0.05f, 1f)
-                        runCatching { player.volume = currentReplayGainMultiplier * factor }
-                        nextDelayMs = 120L
-                    } else {
-                        if (pos > fadeMs) {
-                            runCatching { player.volume = currentReplayGainMultiplier }
-                        }
-                        if (remaining > fadeMs) {
-                            val speed = currentSettings.playbackSpeed.coerceAtLeast(0.5f)
-                            val wallTimeUntilFade = ((remaining - fadeMs) / speed).toLong()
-                            nextDelayMs = (wallTimeUntilFade - 180L).coerceIn(150L, 4_000L)
-                        }
-                    }
-                } else {
-                    runCatching { player.volume = currentReplayGainMultiplier }
+                val repeatMode = runCatching { player.repeatMode }.getOrDefault(Player.REPEAT_MODE_OFF)
+                val speed = currentSettings.playbackSpeed.coerceAtLeast(0.5f)
+                val item = runCatching { player.currentMediaItem }.getOrNull()
+                val idx = runCatching { player.currentMediaItemIndex }.getOrDefault(-1)
+                val trackSourceKey = item?.let { "${it.mediaId}@$idx" }
+                val alreadyTriggeredForTrack = trackSourceKey != null && trackSourceKey == lastCrossfadeSourceKey
+
+                val shouldTrigger = CrossfadeMath.shouldTriggerCrossfade(
+                    crossfadeSeconds = settingsFadeSec,
+                    durationMs = duration,
+                    positionMs = pos,
+                    hasNextItem = hasNext,
+                    repeatMode = repeatMode,
+                    playbackSpeed = speed,
+                    stopAfterCurrentTrack = stopAfterCurrentTrack,
+                    alreadyTransitioning = activeFadeInActive ||
+                        crossfadeFadeJob?.isActive == true ||
+                        alreadyTriggeredForTrack
+                )
+
+                if (shouldTrigger && item != null) {
+                    lastCrossfadeSourceKey = trackSourceKey
+                    val remainingWallMs = ((duration - pos).coerceAtLeast(0L) / speed).toLong()
+                    val effectiveFadeMs = minOf(settingsFadeSec * 1000L, remainingWallMs)
+                        .coerceAtLeast(300L)
+                    launchOverlappingCrossfade(player, item, effectiveFadeMs)
+                    break
                 }
-                delay(nextDelayMs)
+
+                val delayMs = CrossfadeMath.computeMonitorDelayMs(
+                    crossfadeSeconds = settingsFadeSec,
+                    durationMs = duration,
+                    positionMs = pos,
+                    playbackSpeed = speed
+                )
+                delay(delayMs)
             }
         }
     }
 
-    private suspend fun fadeInPlayer(player: Player) {
-        val steps = 8
-        for (i in 1..steps) {
-            if (isServiceDestroyed || !runCatching { player.isPlaying }.getOrDefault(false)) break
-            runCatching { player.volume = currentReplayGainMultiplier * (i.toFloat() / steps.toFloat()) }
-            delay(80L)
+    private fun launchOverlappingCrossfade(
+        mainPlayer: Player,
+        outgoingItem: MediaItem,
+        fadeWallMs: Long
+    ) {
+        crossfadeFadeJob?.cancel()
+        crossfadeFadeJob = serviceScope.launch {
+            performOverlappingCrossfade(mainPlayer, outgoingItem, fadeWallMs)
         }
-        if (!isServiceDestroyed) {
-            runCatching { player.volume = currentReplayGainMultiplier }
+    }
+
+    private suspend fun performOverlappingCrossfade(
+        mainPlayer: Player,
+        outgoingItem: MediaItem,
+        fadeWallMs: Long
+    ) {
+        val speed = currentSettings.playbackSpeed.coerceAtLeast(0.5f)
+        val outgoingBaseGain = currentReplayGainMultiplier
+        val startPosMs = runCatching { mainPlayer.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
+        val incomingItem = runCatching {
+            val nextIdx = mainPlayer.nextMediaItemIndex
+            if (nextIdx != C.INDEX_UNSET) mainPlayer.getMediaItemAt(nextIdx) else null
+        }.getOrNull() ?: return
+
+        val outgoing = getOrCreateOutgoingPlayer()
+        outgoingEqProcessor.updateSettings(
+            eqEnabled = currentSettings.eqEnabled,
+            preampDb = currentSettings.preampDb,
+            bandGainsMb = currentSettings.bandGainsMb
+        )
+        outgoingBalanceProcessor.setBalance(currentSettings.stereoBalance)
+        runCatching {
+            outgoing.setPlaybackParameters(PlaybackParameters(speed))
+            outgoing.volume = outgoingBaseGain
+            outgoing.setMediaItem(outgoingItem, startPosMs + 30L)
+            outgoing.prepare()
+            outgoing.play()
+        }
+
+        // Brief warm-up up to 120ms so outgoing decoder is ready before advancing mainPlayer
+        var waitedMs = 0L
+        while (!isServiceDestroyed && waitedMs < 120L) {
+            val state = runCatching { outgoing.playbackState }.getOrDefault(Player.STATE_IDLE)
+            if (state == Player.STATE_READY) break
+            delay(10L)
+            waitedMs += 10L
+        }
+
+        if (isServiceDestroyed || !runCatching { mainPlayer.isPlaying }.getOrDefault(false)) {
+            stopOutgoingPlayer(outgoing)
+            return
+        }
+
+        activeFadeInActive = true
+        lastCrossfadeIncomingMediaId = incomingItem.mediaId
+        lastCrossfadeAdvanceAtMs = SystemClock.elapsedRealtime()
+        runCatching { mainPlayer.volume = 0f }
+        isAdvancingViaCrossfade = true
+        try {
+            mainPlayer.seekToNextMediaItem()
+            if (!mainPlayer.playWhenReady) {
+                mainPlayer.play()
+            }
+        } finally {
+            isAdvancingViaCrossfade = false
+        }
+
+        val fadeStartMs = SystemClock.elapsedRealtime()
+        try {
+            while (!isServiceDestroyed && activeFadeInActive) {
+                val mainPlaying = runCatching {
+                    mainPlayer.isPlaying || mainPlayer.playWhenReady
+                }.getOrDefault(false)
+                if (!mainPlaying) break
+
+                val elapsed = (SystemClock.elapsedRealtime() - fadeStartMs).coerceAtLeast(0L)
+                val progress = (elapsed.toFloat() / fadeWallMs.toFloat()).coerceIn(0f, 1f)
+                val (outFactor, inFactor) = CrossfadeMath.equalPowerGains(progress)
+
+                runCatching { mainPlayer.volume = currentReplayGainMultiplier * inFactor }
+                val outEnded = runCatching { outgoing.playbackState == Player.STATE_ENDED }.getOrDefault(true)
+                if (!outEnded) {
+                    runCatching { outgoing.volume = outgoingBaseGain * outFactor }
+                }
+
+                if (progress >= 1f) break
+                delay(CROSSFADE_STEP_MS)
+            }
+        } finally {
+            activeFadeInActive = false
+            if (!isServiceDestroyed) {
+                runCatching { mainPlayer.volume = currentReplayGainMultiplier }
+            }
+            stopOutgoingPlayer(outgoing)
         }
     }
 
@@ -675,6 +953,7 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(ACTION_SEEK_BACK_10, Bundle.EMPTY))
                 .add(SessionCommand(ACTION_SEEK_FORWARD_10, Bundle.EMPTY))
                 .add(SessionCommand(ACTION_APPLY_AUDIO_SETTINGS, Bundle.EMPTY))
+                .add(SessionCommand(ACTION_SET_STOP_AFTER_CURRENT, Bundle.EMPTY))
                 .build()
 
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -704,6 +983,9 @@ class PlaybackService : MediaLibraryService() {
                 ACTION_APPLY_AUDIO_SETTINGS -> {
                     val updated = audioSettingsFromBundle(args) ?: prefsStore.loadAudioSettings()
                     applyAudioSettingsToPlayer(player, updated)
+                }
+                ACTION_SET_STOP_AFTER_CURRENT -> {
+                    stopAfterCurrentTrack = args.getBoolean(ARG_STOP_AFTER_CURRENT, false)
                 }
                 else -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
             }
@@ -947,6 +1229,7 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_SEEK_BACK_10 = "com.example.playback.ACTION_SEEK_BACK_10"
         const val ACTION_SEEK_FORWARD_10 = "com.example.playback.ACTION_SEEK_FORWARD_10"
         const val ACTION_APPLY_AUDIO_SETTINGS = "com.example.playback.ACTION_APPLY_AUDIO_SETTINGS"
+        const val ACTION_SET_STOP_AFTER_CURRENT = "com.example.playback.ACTION_SET_STOP_AFTER_CURRENT"
 
         const val ARG_EQ_ENABLED = "arg_eq_enabled"
         const val ARG_EQ_PRESET = "arg_eq_preset"
@@ -962,6 +1245,7 @@ class PlaybackService : MediaLibraryService() {
         const val ARG_SPEED = "arg_speed"
         const val ARG_BALANCE = "arg_balance"
         const val ARG_DYNAMIC_COLORS = "arg_dynamic_colors"
+        const val ARG_STOP_AFTER_CURRENT = "arg_stop_after_current"
 
         const val ACTION_WIDGET_PLAY_PAUSE = "com.example.widget.ACTION_PLAY_PAUSE"
         const val ACTION_WIDGET_NEXT = "com.example.widget.ACTION_NEXT"
@@ -969,6 +1253,7 @@ class PlaybackService : MediaLibraryService() {
 
         private const val SEEK_INCREMENT_MS = 10_000L
         private const val TRACK_GAP_PAUSE_MS = 450L
+        private const val CROSSFADE_STEP_MS = 40L
         private const val MAX_PERSISTED_ITEMS = 120
         private const val WIDGET_IDLE_NOTIFICATION_ID = 9002
         private const val ROOT_ID = "sonora_root"

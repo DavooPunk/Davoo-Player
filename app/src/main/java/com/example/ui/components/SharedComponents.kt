@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -13,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -51,6 +55,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.VerticalAlignTop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -71,24 +76,35 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.repository.DeviceMusicScanner
@@ -301,6 +317,7 @@ fun TrackRow(
     onToggleFavorite: (() -> Unit)? = null,
     onShowLyrics: (() -> Unit)? = null,
     onEditTags: (() -> Unit)? = null,
+    onDeleteFromDevice: (() -> Unit)? = null,
     trailingExtraContent: (@Composable () -> Unit)? = null,
     isSelectionMode: Boolean = false,
     isSelected: Boolean = false,
@@ -519,6 +536,29 @@ fun TrackRow(
                             menuExpanded = false
                             onShowMetadata()
                         }
+                    )
+                }
+                if (onDeleteFromDevice != null) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "Eliminar del dispositivo",
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.DeleteOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onDeleteFromDevice()
+                        },
+                        modifier = Modifier.testTag("track_delete_menu_${track.id}")
                     )
                 }
             }
@@ -830,8 +870,42 @@ fun QueueBottomSheet(
     playbackState: PlaybackUiState,
     onDismiss: () -> Unit,
     onSelectIndex: (Int) -> Unit,
-    onRemoveIndex: (Int) -> Unit
+    onRemoveIndex: (Int) -> Unit,
+    onMoveItem: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> }
 ) {
+    val hasActiveIndex = playbackState.currentIndex in playbackState.queue.indices
+    val queueOffset = if (hasActiveIndex) playbackState.currentIndex else 0
+    val visibleQueue = remember(playbackState.queue, queueOffset, hasActiveIndex) {
+        if (playbackState.queue.isEmpty()) emptyList()
+        else if (hasActiveIndex) playbackState.queue.subList(queueOffset, playbackState.queue.size).toList()
+        else playbackState.queue
+    }
+    val visibleEntries = remember(visibleQueue) {
+        val counts = HashMap<String, Int>(visibleQueue.size)
+        visibleQueue.map { track ->
+            val occ = (counts[track.id] ?: 0) + 1
+            counts[track.id] = occ
+            "${track.id}#$occ" to track
+        }
+    }
+
+    val queueListState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val showScrollToTop by remember {
+        derivedStateOf { queueListState.firstVisibleItemIndex > 0 }
+    }
+
+    val density = LocalDensity.current
+    val defaultItemHeightPx = with(density) { 64.dp.toPx() }
+    var measuredItemHeightPx by remember { mutableFloatStateOf(defaultItemHeightPx) }
+    var draggedVisualIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+
+    val currentQueueOffset by rememberUpdatedState(queueOffset)
+    val currentVisibleSize by rememberUpdatedState(visibleQueue.size)
+    val currentHasActiveIndex by rememberUpdatedState(hasActiveIndex)
+    val currentOnMoveItem by rememberUpdatedState(onMoveItem)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface
@@ -841,25 +915,58 @@ fun QueueBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp)
+                .testTag("queue_bottom_sheet")
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Cola de reproducción",
                         style = MaterialTheme.typography.titleLarge
                     )
+                    val subtitleText = when {
+                        visibleQueue.isEmpty() -> "Sin canciones en cola"
+                        hasActiveIndex -> {
+                            val upcomingCount = (visibleQueue.size - 1).coerceAtLeast(0)
+                            if (upcomingCount == 0) "Sonando ahora · Última canción"
+                            else "Sonando ahora · $upcomingCount ${if (upcomingCount == 1) "siguiente" else "siguientes"}"
+                        }
+                        else -> "${visibleQueue.size} ${if (visibleQueue.size == 1) "canción" else "canciones"} en cola"
+                    }
                     Text(
-                        text = "${playbackState.queue.size} canciones en cola",
+                        text = subtitleText,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Cerrar cola")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AnimatedVisibility(visible = showScrollToTop) {
+                        IconButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    queueListState.animateScrollToItem(0)
+                                }
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("queue_scroll_to_top_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.VerticalAlignTop,
+                                contentDescription = "Volver arriba en la cola",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.minimumInteractiveComponentSize()
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar cola")
+                    }
                 }
             }
 
@@ -867,7 +974,7 @@ fun QueueBottomSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (playbackState.queue.isEmpty()) {
+            if (visibleEntries.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -882,83 +989,182 @@ fun QueueBottomSheet(
                 }
             } else {
                 LazyColumn(
+                    state = queueListState,
                     contentPadding = PaddingValues(vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.testTag("queue_lazy_column")
                 ) {
-                    itemsIndexed(playbackState.queue) { index, item ->
-                        val isCurrent = index == playbackState.currentIndex
-                        Row(
+                    itemsIndexed(
+                        items = visibleEntries,
+                        key = { _, entry -> entry.first }
+                    ) { visualIndex, entry ->
+                        val item = entry.second
+                        val isCurrent = hasActiveIndex && visualIndex == 0
+                        val actualIndex = queueOffset + visualIndex
+                        val isDragging = draggedVisualIndex == visualIndex
+                        val canReorder = !isCurrent && (if (hasActiveIndex) visibleQueue.size > 2 else visibleQueue.size > 1)
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = when {
+                                isCurrent -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f)
+                                isDragging -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                else -> Color.Transparent
+                            },
+                            border = if (isCurrent) {
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                            } else if (isDragging) {
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+                            } else null,
+                            shadowElevation = if (isDragging) 6.dp else 0.dp,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(
-                                    if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-                                    else Color.Transparent
-                                )
-                                .clickable { onSelectIndex(index) }
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier.width(28.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isCurrent) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.GraphicEq,
-                                        contentDescription = "Reproduciendo",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                } else {
-                                    Text(
-                                        text = "${index + 1}",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                .zIndex(if (isDragging) 1f else 0f)
+                                .graphicsLayer {
+                                    translationY = if (isDragging) dragOffsetY else 0f
+                                    val scale = if (isDragging) 1.02f else 1f
+                                    scaleX = scale
+                                    scaleY = scale
                                 }
-                            }
-                            AudioAlbumArtThumbnail(
-                                audioUri = item.contentUri,
-                                albumArtUri = item.albumArtUri,
-                                contentDescription = item.title,
-                                cornerRadius = 8.dp,
-                                modifier = Modifier.size(40.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.title,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                .onSizeChanged { size ->
+                                    if (size.height > 0) {
+                                        measuredItemHeightPx = size.height.toFloat()
+                                    }
+                                }
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelectIndex(actualIndex) }
+                                .then(
+                                    if (isCurrent) Modifier.testTag("queue_now_playing_item")
+                                    else Modifier.testTag("queue_item_${item.id}_$visualIndex")
                                 )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier.width(28.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    FormatBadge(format = item.format)
+                                    if (isCurrent) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.GraphicEq,
+                                            contentDescription = "Sonando ahora",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "$visualIndex",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                AudioAlbumArtThumbnail(
+                                    audioUri = item.contentUri,
+                                    albumArtUri = item.albumArtUri,
+                                    contentDescription = item.title,
+                                    cornerRadius = 8.dp,
+                                    modifier = Modifier.size(42.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    if (isCurrent) {
+                                        Text(
+                                            text = "SONANDO AHORA",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                     Text(
-                                        text = item.artist,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        text = item.title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        FormatBadge(format = item.format)
+                                        Text(
+                                            text = item.artist,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
-                            }
-                            if (!isCurrent) {
-                                IconButton(
-                                    onClick = { onRemoveIndex(index) },
-                                    modifier = Modifier.minimumInteractiveComponentSize()
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.DeleteOutline,
-                                        contentDescription = "Quitar de la cola",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                if (!isCurrent) {
+                                    if (canReorder) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .pointerInput(entry.first) {
+                                                    detectDragGestures(
+                                                        onDragStart = {
+                                                            draggedVisualIndex = visualIndex
+                                                            dragOffsetY = 0f
+                                                        },
+                                                        onDragEnd = {
+                                                            draggedVisualIndex = null
+                                                            dragOffsetY = 0f
+                                                        },
+                                                        onDragCancel = {
+                                                            draggedVisualIndex = null
+                                                            dragOffsetY = 0f
+                                                        },
+                                                        onDrag = { change, dragAmount ->
+                                                            change.consume()
+                                                            val activeVisual = draggedVisualIndex ?: return@detectDragGestures
+                                                            dragOffsetY += dragAmount.y
+                                                            val stepPx = measuredItemHeightPx.coerceAtLeast(48f)
+                                                            val steps = (dragOffsetY / stepPx).toInt()
+                                                            if (steps != 0) {
+                                                                val minIdx = if (currentHasActiveIndex) 1 else 0
+                                                                val maxIdx = (currentVisibleSize - 1).coerceAtLeast(minIdx)
+                                                                val targetVisual = (activeVisual + steps).coerceIn(minIdx, maxIdx)
+                                                                if (targetVisual != activeVisual) {
+                                                                    currentOnMoveItem(
+                                                                        currentQueueOffset + activeVisual,
+                                                                        currentQueueOffset + targetVisual
+                                                                    )
+                                                                    dragOffsetY -= (targetVisual - activeVisual) * stepPx
+                                                                    draggedVisualIndex = targetVisual
+                                                                }
+                                                            }
+                                                        }
+                                                    )
+                                                }
+                                                .testTag("queue_drag_handle_$visualIndex"),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.DragHandle,
+                                                contentDescription = "Reordenar ${item.title}",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { onRemoveIndex(actualIndex) },
+                                        modifier = Modifier
+                                            .minimumInteractiveComponentSize()
+                                            .testTag("queue_remove_button_$visualIndex")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = "Quitar de la cola",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }

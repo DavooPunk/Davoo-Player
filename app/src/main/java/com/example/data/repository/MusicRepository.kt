@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -345,6 +346,52 @@ class MusicRepository(
         )
     }
 
+    suspend fun applyEditedTrackInLibrary(
+        originalTrack: AudioTrack,
+        updatedTrack: AudioTrack
+    ) = withContext(Dispatchers.IO) {
+        saveTrackTagOverride(
+            trackId = updatedTrack.id,
+            title = updatedTrack.title,
+            artist = updatedTrack.artist,
+            album = updatedTrack.album,
+            albumArtist = updatedTrack.albumArtist,
+            genre = updatedTrack.genre,
+            year = updatedTrack.year,
+            trackNumber = updatedTrack.trackNumber,
+            customArtworkUri = updatedTrack.albumArtUri
+        )
+
+        if (originalTrack.isSafImported) {
+            if (originalTrack.contentUri != updatedTrack.contentUri) {
+                importedTrackDao.deleteByUri(originalTrack.contentUri)
+            }
+            importedTrackDao.upsertTracks(
+                listOf(
+                    com.example.data.local.ImportedTrackEntity(
+                        uri = updatedTrack.contentUri,
+                        title = updatedTrack.title,
+                        artist = updatedTrack.artist,
+                        album = updatedTrack.album,
+                        durationMs = updatedTrack.durationMs,
+                        formatName = updatedTrack.format.name,
+                        mimeType = updatedTrack.mimeType,
+                        sizeBytes = updatedTrack.sizeBytes,
+                        folderName = updatedTrack.folderName
+                    )
+                )
+            )
+        } else if (originalTrack.isDocumentTreeTrack) {
+            sdTracksFlow.update { current ->
+                current.map { item -> if (item.id == originalTrack.id) updatedTrack else item }
+            }
+        } else {
+            mediaStoreTracksFlow.update { current ->
+                current.map { item -> if (item.id == originalTrack.id) updatedTrack else item }
+            }
+        }
+    }
+
     suspend fun excludeFolder(folderName: String) {
         val removedUris = withContext(Dispatchers.IO) {
             val uris = combinedRawTracksFlow.first()
@@ -623,6 +670,53 @@ class MusicRepository(
         }
         evictRemovedUrisInBackground(distinct)
         return distinct.size
+    }
+
+    suspend fun cleanupDeletedTracks(tracks: List<AudioTrack>) {
+        if (tracks.isEmpty()) return
+        val distinctIds = tracks.map { it.id }.distinct()
+        val distinctUris = tracks.map { it.contentUri }.distinct()
+        val idSet = distinctIds.toHashSet()
+        val uriSet = distinctUris.toHashSet()
+
+        withContext(Dispatchers.IO) {
+            distinctIds.chunked(500).forEach { chunk ->
+                runCatching { playlistDao.deleteTracksFromAllPlaylists(chunk) }
+                runCatching { trackStatsDao.deleteStatsForTracks(chunk) }
+                runCatching { trackTagOverrideDao.deleteOverridesForTracks(chunk) }
+                runCatching { trackLyricsDao.deleteLyricsForTracks(chunk) }
+                runCatching { trackLyricsTranslationDao?.deleteTranslationsForTracks(chunk) }
+            }
+            val importedUris = tracks.filter { it.isSafImported }.map { it.contentUri }.distinct()
+            importedUris.chunked(500).forEach { chunk ->
+                runCatching { importedTrackDao.deleteByUris(chunk) }
+            }
+
+            mediaStoreTracksFlow.update { current ->
+                current.filterNot { it.id in idSet || it.contentUri in uriSet }
+            }
+            val removedSdByTree = mutableMapOf<String, Int>()
+            sdTracksFlow.update { current ->
+                current.filterNot { track ->
+                    val match = track.id in idSet || track.contentUri in uriSet
+                    val treeUri = track.sourceTreeUri
+                    if (match && !treeUri.isNullOrBlank()) {
+                        removedSdByTree[treeUri] = (removedSdByTree[treeUri] ?: 0) + 1
+                    }
+                    match
+                }
+            }
+            if (removedSdByTree.isNotEmpty()) {
+                _sdCardFolders.update { folders ->
+                    folders.map { folder ->
+                        val dec = removedSdByTree[folder.treeUri] ?: 0
+                        if (dec > 0) folder.copy(trackCount = (folder.trackCount - dec).coerceAtLeast(0))
+                        else folder
+                    }
+                }
+            }
+        }
+        evictRemovedUrisInBackground(distinctUris)
     }
 
     suspend fun moveTrackInPlaylist(playlistId: Long, fromIndex: Int, toIndex: Int) {

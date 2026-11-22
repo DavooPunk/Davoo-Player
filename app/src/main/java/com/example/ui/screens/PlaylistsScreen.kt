@@ -369,7 +369,8 @@ fun SmartPlaylistDetailScreen(
     onShowLyrics: (AudioTrack) -> Unit,
     onEditTags: (AudioTrack) -> Unit,
     onShowMetadata: (AudioTrack) -> Unit,
-    bottomContentPadding: PaddingValues
+    bottomContentPadding: PaddingValues,
+    onDeleteTrack: ((AudioTrack) -> Unit)? = null
 ) {
     val listState = rememberLazyListState()
 
@@ -467,7 +468,8 @@ fun SmartPlaylistDetailScreen(
                             onShowMetadata = { onShowMetadata(track) },
                             onToggleFavorite = { onToggleFavorite(track) },
                             onShowLyrics = { onShowLyrics(track) },
-                            onEditTags = { onEditTags(track) }
+                            onEditTags = { onEditTags(track) },
+                            onDeleteFromDevice = onDeleteTrack?.let { cb -> { cb(track) } }
                         )
                     }
                 }
@@ -513,7 +515,8 @@ fun PlaylistDetailScreen(
     onRemoveTracks: (Long, List<String>) -> Unit = { pid, ids ->
         ids.forEach { onRemoveTrack(pid, it) }
     },
-    onAddTracksToOtherPlaylist: (List<AudioTrack>) -> Unit = {}
+    onAddTracksToOtherPlaylist: (List<AudioTrack>) -> Unit = {},
+    onDeleteTrack: ((AudioTrack) -> Unit)? = null
 ) {
     var showEditDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -864,6 +867,7 @@ fun PlaylistDetailScreen(
                             onToggleFavorite = { onToggleFavorite(track) },
                             onShowLyrics = { onShowLyrics(track) },
                             onEditTags = { onEditTags(track) },
+                            onDeleteFromDevice = onDeleteTrack?.let { cb -> { cb(track) } },
                             trailingExtraContent = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (index > 0) {

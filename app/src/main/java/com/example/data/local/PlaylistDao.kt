@@ -34,6 +34,9 @@ interface PlaylistDao {
     @Query("DELETE FROM playlist_tracks WHERE playlistId = :playlistId AND trackId IN (:trackIds)")
     suspend fun deleteTracksFromPlaylist(playlistId: Long, trackIds: List<String>)
 
+    @Query("DELETE FROM playlist_tracks WHERE trackId IN (:trackIds)")
+    suspend fun deleteTracksFromAllPlaylists(trackIds: List<String>)
+
     @Query("SELECT * FROM playlist_tracks WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getEntriesOrdered(playlistId: Long): List<PlaylistTrackEntity>
 
@@ -124,6 +127,9 @@ interface TrackStatsDao {
             )
         )
     }
+
+    @Query("DELETE FROM track_stats WHERE trackId IN (:trackIds)")
+    suspend fun deleteStatsForTracks(trackIds: List<String>)
 }
 
 @Dao
@@ -133,6 +139,9 @@ interface TrackTagOverrideDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(override: TrackTagOverrideEntity)
+
+    @Query("DELETE FROM track_tag_overrides WHERE trackId IN (:trackIds)")
+    suspend fun deleteOverridesForTracks(trackIds: List<String>)
 }
 
 @Dao
@@ -160,6 +169,9 @@ interface TrackLyricsDao {
 
     @Query("DELETE FROM track_lyrics WHERE trackId = :trackId")
     suspend fun deleteForTrack(trackId: String)
+
+    @Query("DELETE FROM track_lyrics WHERE trackId IN (:trackIds)")
+    suspend fun deleteLyricsForTracks(trackIds: List<String>)
 }
 
 @Dao
@@ -172,4 +184,7 @@ interface TrackLyricsTranslationDao {
 
     @Query("DELETE FROM track_lyrics_translations WHERE trackId = :trackId")
     suspend fun deleteForTrack(trackId: String)
+
+    @Query("DELETE FROM track_lyrics_translations WHERE trackId IN (:trackIds)")
+    suspend fun deleteTranslationsForTracks(trackIds: List<String>)
 }

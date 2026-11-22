@@ -125,6 +125,7 @@ class PlaybackController(
                 reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
             ) {
                 _stopAfterCurrentTrack.value = false
+                mediaController?.let { sendStopAfterCurrentToService(it, false) }
                 mediaController?.pause()
             }
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -182,6 +183,7 @@ class PlaybackController(
                         syncFromPlayer(controller)
                     }
                     sendAudioSettingsToService(controller)
+                    sendStopAfterCurrentToService(controller, _stopAfterCurrentTrack.value)
                     if (controller.isPlaying) startPositionTicker()
                 }.onFailure {
                     controllerFuture = null
@@ -249,6 +251,7 @@ class PlaybackController(
     fun startSleepTimer(minutes: Int?, afterCurrentTrack: Boolean) {
         sleepTimerJob?.cancel()
         _stopAfterCurrentTrack.value = afterCurrentTrack
+        mediaController?.let { sendStopAfterCurrentToService(it, afterCurrentTrack) }
         if (afterCurrentTrack || minutes == null || minutes <= 0) {
             _sleepTimerRemainingMs.value = null
             return
@@ -265,6 +268,7 @@ class PlaybackController(
             if (isActive) {
                 _sleepTimerRemainingMs.value = null
                 _stopAfterCurrentTrack.value = false
+                mediaController?.let { sendStopAfterCurrentToService(it, false) }
                 mediaController?.pause()
             }
         }
@@ -275,6 +279,7 @@ class PlaybackController(
         sleepTimerJob = null
         _sleepTimerRemainingMs.value = null
         _stopAfterCurrentTrack.value = false
+        mediaController?.let { sendStopAfterCurrentToService(it, false) }
     }
 
     fun playTracks(tracks: List<AudioTrack>, startIndex: Int = 0, shuffle: Boolean = false) {
@@ -421,6 +426,80 @@ class PlaybackController(
         }
     }
 
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        val controller = mediaController ?: return
+        val count = controller.mediaItemCount
+        if (fromIndex !in 0 until count || toIndex !in 0 until count || fromIndex == toIndex) return
+        controller.moveMediaItem(fromIndex, toIndex)
+        syncFromPlayer(controller)
+    }
+
+    fun removeTracksFromQueue(trackIds: Set<String>) {
+        if (trackIds.isEmpty()) return
+        trackLookup = trackLookup - trackIds
+        val controller = mediaController
+        if (controller == null) {
+            _uiState.update { state ->
+                val remaining = state.queue.filterNot { it.id in trackIds }
+                val wasCurrentDeleted = state.currentTrack?.id in trackIds
+                if (remaining.isEmpty()) {
+                    state.copy(
+                        currentTrack = null,
+                        queue = emptyList(),
+                        currentIndex = -1,
+                        isPlaying = false,
+                        positionMs = 0L,
+                        durationMs = 0L
+                    )
+                } else if (wasCurrentDeleted) {
+                    val nextIdx = state.currentIndex.coerceIn(0, remaining.lastIndex)
+                    state.copy(
+                        currentTrack = remaining[nextIdx],
+                        queue = remaining,
+                        currentIndex = nextIdx,
+                        isPlaying = false,
+                        positionMs = 0L
+                    )
+                } else {
+                    val newCurrentIdx = state.currentTrack?.id?.let { cid ->
+                        remaining.indexOfFirst { it.id == cid }
+                    } ?: -1
+                    state.copy(
+                        queue = remaining,
+                        currentIndex = newCurrentIdx
+                    )
+                }
+            }
+            return
+        }
+
+        val currentIdx = controller.currentMediaItemIndex
+        val indicesToRemove = buildList {
+            for (i in 0 until controller.mediaItemCount) {
+                val item = runCatching { controller.getMediaItemAt(i) }.getOrNull() ?: continue
+                val itemTrackId = item.mediaMetadata.extras?.getString(EXTRA_TRACK_ID) ?: item.mediaId
+                if (itemTrackId in trackIds) {
+                    add(i)
+                }
+            }
+        }
+        if (indicesToRemove.isEmpty()) return
+
+        val removingCurrent = currentIdx in indicesToRemove
+        if (indicesToRemove.size >= controller.mediaItemCount) {
+            controller.stop()
+            controller.clearMediaItems()
+        } else {
+            for (idx in indicesToRemove.asReversed()) {
+                controller.removeMediaItem(idx)
+            }
+            if (removingCurrent && !controller.isPlaying) {
+                controller.prepare()
+            }
+        }
+        syncFromPlayer(controller)
+    }
+
     fun toggleShuffle() {
         val controller = mediaController ?: return
         controller.shuffleModeEnabled = !controller.shuffleModeEnabled
@@ -500,6 +579,21 @@ class PlaybackController(
             }
             controller.sendCustomCommand(
                 SessionCommand(PlaybackService.ACTION_APPLY_AUDIO_SETTINGS, Bundle.EMPTY),
+                args
+            )
+        }
+    }
+
+    private fun sendStopAfterCurrentToService(
+        controller: MediaController,
+        stopAfterCurrent: Boolean
+    ) {
+        runCatching {
+            val args = Bundle().apply {
+                putBoolean(PlaybackService.ARG_STOP_AFTER_CURRENT, stopAfterCurrent)
+            }
+            controller.sendCustomCommand(
+                SessionCommand(PlaybackService.ACTION_SET_STOP_AFTER_CURRENT, Bundle.EMPTY),
                 args
             )
         }
