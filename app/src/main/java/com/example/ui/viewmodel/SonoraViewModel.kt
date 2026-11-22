@@ -18,6 +18,7 @@ import com.example.data.local.PlaybackPreferencesStore
 import com.example.data.local.SonoraDatabase
 import com.example.data.repository.AppUpdateChecker
 import com.example.data.repository.AppUpdateInfo
+import com.example.data.repository.AudioTagParsers
 import com.example.data.repository.AudioTagWriter
 import com.example.data.repository.DeviceMusicScanner
 import com.example.data.repository.LastFmRepository
@@ -51,6 +52,7 @@ import com.example.model.PlaylistSummary
 import com.example.model.SdCardFolder
 import com.example.model.SortOrder
 import com.example.playback.PlaybackController
+import com.example.playback.PlaybackPositionState
 import com.example.playback.PlaybackUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -163,6 +165,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     private val snackbarFlow = MutableStateFlow<String?>(null)
 
     val playbackState: StateFlow<PlaybackUiState> = playbackController.uiState
+    val playbackPosition: StateFlow<PlaybackPositionState> = playbackController.positionState
     val scrobbleNotice: StateFlow<String?> = playbackController.scrobbleNotice
     val mediaPlayer: StateFlow<Player?> = playbackController.playerFlow
     val audioSettings: StateFlow<AudioSettings> = playbackController.audioSettings
@@ -512,8 +515,21 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     init {
         startDebouncedGlobalSearchPipeline()
         playbackController.connect()
+        observeLibraryReadyForSessionRestore()
         refreshLibrary()
         maybeRunPeriodicUpdateCheck()
+    }
+
+    private fun observeLibraryReadyForSessionRestore() {
+        viewModelScope.launch {
+            combine(derivedCollectionsFlow, repository.isScanning) { derived, scanning ->
+                derived.allTracks to scanning
+            }.collectLatest { (tracks, scanning) ->
+                if (!scanning && tracks.isNotEmpty()) {
+                    playbackController.restoreSavedSessionOnLibraryReady(tracks)
+                }
+            }
+        }
     }
 
     @OptIn(FlowPreview::class)
@@ -1015,6 +1031,58 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
             snackbarFlow.value = "No se pudo procesar la letra seleccionada"
         }
         return saved
+    }
+
+    suspend fun adjustLyricsOffset(
+        track: AudioTrack,
+        currentLyrics: LyricsData,
+        deltaMs: Long
+    ): LyricsData {
+        val nextOffset = (currentLyrics.offsetMs + deltaMs).coerceIn(-60_000L, 60_000L)
+        return repository.saveLyricsOffset(track, currentLyrics, nextOffset)
+    }
+
+    suspend fun resetLyricsOffset(
+        track: AudioTrack,
+        currentLyrics: LyricsData
+    ): LyricsData {
+        return repository.saveLyricsOffset(track, currentLyrics, 0L)
+    }
+
+    fun buildExportableLrcContent(
+        track: AudioTrack,
+        lyrics: LyricsData,
+        translatedLyrics: LyricsData?,
+        includeTranslation: Boolean
+    ): String {
+        return AudioTagParsers.exportLyricsToLrc(
+            trackTitle = track.title,
+            trackArtist = track.artist,
+            trackAlbum = track.album,
+            lyrics = lyrics,
+            translatedLyrics = translatedLyrics,
+            includeTranslation = includeTranslation
+        )
+    }
+
+    fun suggestLrcFileName(track: AudioTrack): String {
+        return AudioTagParsers.buildSafeLrcFileName(track.artist, track.title)
+    }
+
+    fun exportLyricsToUri(uri: Uri, lrcContent: String) {
+        viewModelScope.launch {
+            val ok = repository.exportLyricsLrcToUri(uri, lrcContent)
+            snackbarFlow.value = if (ok) {
+                "Archivo .lrc exportado correctamente"
+            } else {
+                "No se pudo guardar el archivo .lrc"
+            }
+        }
+    }
+
+    suspend fun createShareableLrcUri(track: AudioTrack, lrcContent: String): Uri? {
+        val fileName = AudioTagParsers.buildSafeLrcFileName(track.artist, track.title)
+        return repository.createShareableLrcUri(fileName, lrcContent)
     }
 
     // Playlist actions + M3U Import / Export

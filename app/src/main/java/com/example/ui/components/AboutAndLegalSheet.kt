@@ -139,8 +139,20 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.4",
+        version = "v2.0.5",
         tag = "Actual",
+        items = listOf(
+            "Visor de letras inmersivo a pantalla completa (estilo Spotify): elimina cierres accidentales al deslizar, añade cabecera limpia con flecha para cerrar y título/artista centrados sobre el fondo degradado dinámico sin cajas contenedoras.",
+            "Navegación libre en letras: al tocar o deslizar la letra se pausa el auto-scroll por 4.5 segundos manteniendo el resaltado de la línea actual y mostrando el botón flotante «Sincronizar» para volver al instante.",
+            "Ajuste fino de sincronización (±0.5s) y exportación .lrc: calibra el adelanto o retraso por canción persistente en Room y exporta/comparte archivos .lrc (original o bilingüe) con timestamps corregidos mediante SAF y FileProvider.",
+            "Reanudación exacta de sesión al abrir la app: restaura en segundo plano la última canción, cola completa ordenada y milisegundo exacto siempre en estado pausado para continuar sin reproducción automática indeseada.",
+            "Interfaz de reproducción más limpia y proporcionada: elimina los botones de salto de 10 segundos y ajusta la carátula y controles al alto disponible de pantalla, con gestos de deslizado en el mini reproductor y enlaces directos a Artista y Álbum.",
+            "Optimización de fluidez y respuesta: desacopla el reloj de progreso de la raíz de la interfaz para evitar recomposiciones globales cada 350 ms, añade caché en memoria de sesión e IPC, limita hilos de decodificación de carátulas/duración y optimiza animaciones en GPU para eliminar tirones."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.4",
+        tag = "Anterior",
         items = listOf(
             "Crossfade real entre canciones (0 a 12 s): transición solapada de doble canal con curva equal-power para mantener volumen constante, ecualizador/balance independientes, soporte ReplayGain y control continuo desde Ajustes y Ecualizador.",
             "Colores adaptativos en Letras y Traducción: el menú de letras, su degradado de fondo, la línea traducida activa, la barra de progreso y los menús flotantes de traducción (DeepL/Google e idiomas) y gestión .lrc ahora usan el color dinámico extraído de la carátula de la canción en reproducción.",

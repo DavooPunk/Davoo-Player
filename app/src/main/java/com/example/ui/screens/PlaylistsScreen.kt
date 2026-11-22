@@ -202,7 +202,7 @@ fun PlaylistsScreen(
                                 Triple(SmartPlaylistType.MOST_PLAYED, mostPlayedCount, Icons.Rounded.LocalFireDepartment),
                                 Triple(SmartPlaylistType.HISTORY, historyCount, Icons.Rounded.History)
                             )
-                            items(smartItems) { (type, count, icon) ->
+                            items(smartItems, key = { it.first.name }, contentType = { "smart_playlist" }) { (type, count, icon) ->
                                 val tint = if (type == SmartPlaylistType.FAVORITES || type == SmartPlaylistType.MOST_PLAYED) {
                                     CopperAmber
                                 } else LosslessCyan
@@ -285,7 +285,7 @@ fun PlaylistsScreen(
                         }
                     }
                 } else {
-                    items(playlists, key = { it.id }) { playlist ->
+                    items(playlists, key = { it.id }, contentType = { "playlist_card" }) { playlist ->
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -455,7 +455,7 @@ fun SmartPlaylistDetailScreen(
                         }
                     }
                 } else {
-                    itemsIndexed(tracks, key = { _, t -> t.id }) { index, track ->
+                    itemsIndexed(tracks, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { index, track ->
                         val isCurrent = playbackState.currentTrack?.id == track.id
                         TrackRow(
                             track = track,
@@ -836,7 +836,7 @@ fun PlaylistDetailScreen(
                         }
                     }
                 } else {
-                    itemsIndexed(playlist.tracks, key = { _, t -> t.id }) { index, track ->
+                    itemsIndexed(playlist.tracks, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { index, track ->
                         val isCurrent = playbackState.currentTrack?.id == track.id
                         val isSelected = track.id in selectedTrackIds
                         TrackRow(
@@ -1155,7 +1155,7 @@ private fun BatchAddTracksSheet(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        items(filteredAvailable, key = { it.id }) { track ->
+                        items(filteredAvailable, key = { it.id }, contentType = { "batch_track_pick" }) { track ->
                             val checked = selectedTracks.any { it.id == track.id }
                             Row(
                                 modifier = Modifier

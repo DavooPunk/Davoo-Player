@@ -182,7 +182,8 @@ data class LyricsData(
     val lines: List<LyricLine>,
     val isSynced: Boolean,
     val sourceLabel: String,
-    val hasEmbeddedTranslation: Boolean = false
+    val hasEmbeddedTranslation: Boolean = false,
+    val offsetMs: Long = 0L
 )
 
 val TEN_BAND_CENTERS_HZ = listOf(31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)

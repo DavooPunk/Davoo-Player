@@ -269,7 +269,7 @@ fun LastFmProfileScreen(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(LastFmPeriod.entries, key = { it.apiValue }) { period ->
+                            items(LastFmPeriod.entries, key = { it.apiValue }, contentType = { "lastfm_period_chip" }) { period ->
                                 val selected = uiState.selectedPeriod == period
                                 FilterChip(
                                     selected = selected,
@@ -356,7 +356,8 @@ fun LastFmProfileScreen(
                 } else {
                     items(
                         items = activeTracks,
-                        key = { "${uiState.selectedTab.name}_${it.id}" }
+                        key = { "${uiState.selectedTab.name}_${it.id}" },
+                        contentType = { "lastfm_track_row" }
                     ) { item ->
                         LaunchedEffect(item.lookupKey, item.deezerLookupDone) {
                             if (!item.deezerLookupDone) {

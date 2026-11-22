@@ -167,6 +167,13 @@ interface TrackLyricsDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entity: TrackLyricsEntity)
 
+    @Query("UPDATE track_lyrics SET offsetMs = :offsetMs, updatedAt = :updatedAt WHERE trackId = :trackId")
+    suspend fun updateOffset(
+        trackId: String,
+        offsetMs: Long,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
     @Query("DELETE FROM track_lyrics WHERE trackId = :trackId")
     suspend fun deleteForTrack(trackId: String)
 

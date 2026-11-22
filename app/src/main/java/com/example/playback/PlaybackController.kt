@@ -12,7 +12,11 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
+import com.example.data.local.ExactPlaybackSession
 import com.example.data.local.PlaybackPreferencesStore
+import com.example.data.local.PlaybackSessionRestorePlanner
+import com.example.data.local.SavedMediaItemSnapshot
+import com.example.data.local.SavedPlaybackSession
 import com.example.data.repository.LastFmRepository
 import com.example.data.repository.LastFmScrobblePolicy
 import com.example.data.repository.MusicRepository
@@ -34,6 +38,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+data class PlaybackPositionState(
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L
+)
 
 data class PlaybackUiState(
     val currentTrack: AudioTrack? = null,
@@ -72,10 +81,24 @@ class PlaybackController(
     private var sleepTimerJob: Job? = null
     private var settingsSyncJob: Job? = null
     private var scrobbleDismissJob: Job? = null
+    private var persistSnapshotJob: Job? = null
     @Volatile
     private var trackLookup: Map<String, AudioTrack> = emptyMap()
     private var lastRecordedTrackId: String? = null
     private var restoredSessionAttempted: Boolean = false
+    private var userHasInitiatedPlayback: Boolean = false
+    private var hasRestoredFullLibrarySession: Boolean = false
+    private var isRestoringSession: Boolean = false
+    private var pendingLibraryTracksForRestore: List<AudioTrack>? = null
+    private var fullQueueTrackIds: List<String> = emptyList()
+    private var fullQueueWindowOffset: Int = 0
+    private var lastPeriodicExactSaveMs: Long = 0L
+
+    // Cached timeline data to prevent repeated Binder IPC loops over 250+ MediaItems on ticks/events
+    private var cachedQueue: List<AudioTrack> = emptyList()
+    private var cachedWindowIds: List<String> = emptyList()
+    private var queueCacheDirty: Boolean = true
+    private var hasPersistedExactStructure: Boolean = false
 
     private var currentScrobbleTrackId: String? = null
     private var currentScrobbleStartEpochSec: Long = 0L
@@ -87,6 +110,9 @@ class PlaybackController(
 
     private val _playerFlow = MutableStateFlow<Player?>(null)
     val playerFlow: StateFlow<Player?> = _playerFlow.asStateFlow()
+
+    private val _positionState = MutableStateFlow(PlaybackPositionState())
+    val positionState: StateFlow<PlaybackPositionState> = _positionState.asStateFlow()
 
     private val _uiState = MutableStateFlow(PlaybackUiState())
     val uiState: StateFlow<PlaybackUiState> = _uiState.asStateFlow()
@@ -105,10 +131,12 @@ class PlaybackController(
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
-            if (events.containsAny(
-                    Player.EVENT_TIMELINE_CHANGED,
+            val timelineChanged = events.containsAny(
+                Player.EVENT_TIMELINE_CHANGED,
+                Player.EVENT_MEDIA_METADATA_CHANGED
+            )
+            if (timelineChanged || events.containsAny(
                     Player.EVENT_MEDIA_ITEM_TRANSITION,
-                    Player.EVENT_MEDIA_METADATA_CHANGED,
                     Player.EVENT_IS_PLAYING_CHANGED,
                     Player.EVENT_PLAYBACK_STATE_CHANGED,
                     Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED,
@@ -116,7 +144,10 @@ class PlaybackController(
                     Player.EVENT_POSITION_DISCONTINUITY
                 )
             ) {
-                syncFromPlayer(player)
+                if (timelineChanged) {
+                    queueCacheDirty = true
+                }
+                syncFromPlayer(player, timelineChanged = timelineChanged)
             }
         }
 
@@ -133,11 +164,23 @@ class PlaybackController(
             ) {
                 resetCurrentScrobbleSession()
             }
-            mediaController?.let { syncFromPlayer(it) }
+            mediaController?.let {
+                syncFromPlayer(it)
+                persistExactSessionSnapshot(it, queueStructureChanged = false)
+            }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            val pos = mediaController?.currentPosition?.coerceAtLeast(0L)
+            val controller = mediaController
+            val pos = controller?.currentPosition?.coerceAtLeast(0L)
+            val dur = controller?.duration?.takeIf { it > 0L }
+                ?: _uiState.value.durationMs
+            if (pos != null) {
+                _positionState.value = PlaybackPositionState(
+                    positionMs = pos,
+                    durationMs = dur.coerceAtLeast(0L)
+                )
+            }
             _uiState.update {
                 it.copy(
                     isPlaying = isPlaying,
@@ -145,11 +188,13 @@ class PlaybackController(
                 )
             }
             if (isPlaying) {
+                userHasInitiatedPlayback = true
                 startPositionTicker()
                 recordCurrentTrackPlayIfNeeded()
                 _uiState.value.currentTrack?.let { reportLastFmNowPlayingIfNeeded(it) }
             } else {
                 stopPositionTicker()
+                controller?.let { persistExactSessionSnapshot(it, queueStructureChanged = false) }
             }
         }
 
@@ -179,8 +224,19 @@ class PlaybackController(
                     if (pending != null) {
                         playTracks(pending.tracks, pending.startIndex, pending.shuffle)
                     } else {
-                        restoreSavedSessionIfIdle(controller)
-                        syncFromPlayer(controller)
+                        val pendingLib = pendingLibraryTracksForRestore
+                        if (pendingLib != null &&
+                            pendingLib.isNotEmpty() &&
+                            !userHasInitiatedPlayback &&
+                            !hasRestoredFullLibrarySession &&
+                            !controller.isPlaying &&
+                            !controller.playWhenReady
+                        ) {
+                            applyFullLibrarySessionRestore(controller, pendingLib)
+                        } else {
+                            restoreSavedSessionIfIdle(controller)
+                            syncFromPlayer(controller)
+                        }
                     }
                     sendAudioSettingsToService(controller)
                     sendStopAfterCurrentToService(controller, _stopAfterCurrentTrack.value)
@@ -198,6 +254,8 @@ class PlaybackController(
         sleepTimerJob?.cancel()
         techSpecJob?.cancel()
         scrobbleDismissJob?.cancel()
+        persistSnapshotJob?.cancel()
+        persistSnapshotJob = null
         if (settingsSyncJob?.isActive == true) {
             settingsSyncJob?.cancel()
             prefsStore.saveAudioSettings(_audioSettings.value)
@@ -209,6 +267,10 @@ class PlaybackController(
         mediaController = null
         bandHelper.release()
         trackLookup = emptyMap()
+        cachedQueue = emptyList()
+        cachedWindowIds = emptyList()
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
         _playerFlow.value = null
     }
 
@@ -284,6 +346,8 @@ class PlaybackController(
 
     fun playTracks(tracks: List<AudioTrack>, startIndex: Int = 0, shuffle: Boolean = false) {
         if (tracks.isEmpty()) return
+        userHasInitiatedPlayback = true
+        hasRestoredFullLibrarySession = true
         val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
         trackLookup = tracks.associateBy { it.id }
         lastRecordedTrackId = null
@@ -305,13 +369,18 @@ class PlaybackController(
         val windowEnd = (windowStart + MAX_IPC_QUEUE_SIZE).coerceAtMost(tracks.size)
         val windowedTracks = tracks.subList(windowStart, windowEnd)
         val adjustedIndex = (safeIndex - windowStart).coerceIn(0, windowedTracks.lastIndex)
+        fullQueueTrackIds = tracks.map { it.id }
+        fullQueueWindowOffset = windowStart
+        populateQueueCacheFromTracks(windowedTracks)
+        hasPersistedExactStructure = false
 
         val mediaItems = windowedTracks.map { it.toMediaItem() }
         controller.shuffleModeEnabled = shuffle
         controller.setMediaItems(mediaItems, adjustedIndex, 0L)
         controller.prepare()
         controller.play()
-        syncFromPlayer(controller)
+        syncFromPlayer(controller, timelineChanged = false)
+        persistExactSessionSnapshot(controller, overridePositionMs = 0L, queueStructureChanged = true)
         recordCurrentTrackPlayIfNeeded()
     }
 
@@ -324,7 +393,12 @@ class PlaybackController(
         }
         val insertIndex = (controller.currentMediaItemIndex + 1).coerceAtMost(controller.mediaItemCount)
         controller.addMediaItem(insertIndex, track.toMediaItem())
-        syncFromPlayer(controller)
+        fullQueueTrackIds = emptyList()
+        fullQueueWindowOffset = 0
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
+        syncFromPlayer(controller, timelineChanged = true)
+        persistExactSessionSnapshot(controller, queueStructureChanged = true)
     }
 
     fun enqueueTrack(track: AudioTrack) {
@@ -335,7 +409,12 @@ class PlaybackController(
             return
         }
         controller.addMediaItem(track.toMediaItem())
-        syncFromPlayer(controller)
+        fullQueueTrackIds = emptyList()
+        fullQueueWindowOffset = 0
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
+        syncFromPlayer(controller, timelineChanged = true)
+        persistExactSessionSnapshot(controller, queueStructureChanged = true)
     }
 
     fun enqueueTracks(tracks: List<AudioTrack>) {
@@ -347,7 +426,12 @@ class PlaybackController(
             return
         }
         controller.addMediaItems(tracks.take(MAX_IPC_QUEUE_SIZE).map { it.toMediaItem() })
-        syncFromPlayer(controller)
+        fullQueueTrackIds = emptyList()
+        fullQueueWindowOffset = 0
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
+        syncFromPlayer(controller, timelineChanged = true)
+        persistExactSessionSnapshot(controller, queueStructureChanged = true)
     }
 
     val player: Player?
@@ -355,6 +439,7 @@ class PlaybackController(
 
     fun play() {
         val controller = mediaController ?: return
+        userHasInitiatedPlayback = true
         if (controller.playbackState == Player.STATE_IDLE && controller.mediaItemCount > 0) {
             controller.prepare()
         }
@@ -362,13 +447,15 @@ class PlaybackController(
     }
 
     fun pause() {
-        mediaController?.pause()
+        val controller = mediaController ?: return
+        controller.pause()
+        persistExactSessionSnapshot(controller, queueStructureChanged = false)
     }
 
     fun togglePlayPause() {
         val controller = mediaController ?: return
         if (controller.isPlaying) {
-            controller.pause()
+            pause()
         } else {
             play()
         }
@@ -379,7 +466,13 @@ class PlaybackController(
         val maxDuration = controller.duration.takeIf { it > 0L } ?: Long.MAX_VALUE
         val clamped = positionMs.coerceIn(0L, maxDuration)
         controller.seekTo(clamped)
+        val dur = controller.duration.takeIf { it > 0L } ?: _uiState.value.durationMs
+        _positionState.value = PlaybackPositionState(
+            positionMs = clamped,
+            durationMs = dur.coerceAtLeast(0L)
+        )
         _uiState.update { it.copy(positionMs = clamped) }
+        persistExactSessionSnapshot(controller, overridePositionMs = clamped, queueStructureChanged = false)
     }
 
     fun seekBackward(deltaMs: Long = 10_000L) {
@@ -413,6 +506,7 @@ class PlaybackController(
     fun skipToQueueIndex(index: Int) {
         val controller = mediaController ?: return
         if (index in 0 until controller.mediaItemCount) {
+            userHasInitiatedPlayback = true
             controller.seekToDefaultPosition(index)
             controller.play()
         }
@@ -422,7 +516,12 @@ class PlaybackController(
         val controller = mediaController ?: return
         if (index in 0 until controller.mediaItemCount) {
             controller.removeMediaItem(index)
-            syncFromPlayer(controller)
+            fullQueueTrackIds = emptyList()
+            fullQueueWindowOffset = 0
+            queueCacheDirty = true
+            hasPersistedExactStructure = false
+            syncFromPlayer(controller, timelineChanged = true)
+            persistExactSessionSnapshot(controller, queueStructureChanged = true)
         }
     }
 
@@ -431,7 +530,12 @@ class PlaybackController(
         val count = controller.mediaItemCount
         if (fromIndex !in 0 until count || toIndex !in 0 until count || fromIndex == toIndex) return
         controller.moveMediaItem(fromIndex, toIndex)
-        syncFromPlayer(controller)
+        fullQueueTrackIds = emptyList()
+        fullQueueWindowOffset = 0
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
+        syncFromPlayer(controller, timelineChanged = true)
+        persistExactSessionSnapshot(controller, queueStructureChanged = true)
     }
 
     fun removeTracksFromQueue(trackIds: Set<String>) {
@@ -497,13 +601,19 @@ class PlaybackController(
                 controller.prepare()
             }
         }
-        syncFromPlayer(controller)
+        fullQueueTrackIds = emptyList()
+        fullQueueWindowOffset = 0
+        queueCacheDirty = true
+        hasPersistedExactStructure = false
+        syncFromPlayer(controller, timelineChanged = true)
+        persistExactSessionSnapshot(controller, queueStructureChanged = true)
     }
 
     fun toggleShuffle() {
         val controller = mediaController ?: return
         controller.shuffleModeEnabled = !controller.shuffleModeEnabled
-        syncFromPlayer(controller)
+        syncFromPlayer(controller, timelineChanged = false)
+        persistExactSessionSnapshot(controller, queueStructureChanged = false)
     }
 
     fun cycleRepeatMode() {
@@ -513,17 +623,43 @@ class PlaybackController(
             Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
             else -> Player.REPEAT_MODE_OFF
         }
-        syncFromPlayer(controller)
+        syncFromPlayer(controller, timelineChanged = false)
+        persistExactSessionSnapshot(controller, queueStructureChanged = false)
     }
 
     /** Refresh track metadata inside active UI state when favorites or tags are edited. */
     fun refreshTrackReferences(updatedTracks: List<AudioTrack>) {
         if (updatedTracks.isEmpty()) return
-        trackLookup = trackLookup + updatedTracks.associateBy { it.id }
-        _uiState.update { state ->
-            val current = state.currentTrack?.let { trackLookup[it.id] ?: it }
-            val updatedQueue = state.queue.map { q -> trackLookup[q.id] ?: q }
-            state.copy(currentTrack = current, queue = updatedQueue)
+        val nextLookup = LinkedHashMap<String, AudioTrack>(updatedTracks.size + trackLookup.size)
+        nextLookup.putAll(trackLookup)
+        for (track in updatedTracks) {
+            nextLookup[track.id] = track
+        }
+        trackLookup = nextLookup
+
+        val currentState = _uiState.value
+        val cur = currentState.currentTrack
+        val nextCur = cur?.let { nextLookup[it.id] ?: it }
+        var queueChanged = cur != nextCur
+        val nextQueue = if (currentState.queue.isEmpty()) {
+            currentState.queue
+        } else {
+            val mapped = ArrayList<AudioTrack>(currentState.queue.size)
+            for (q in currentState.queue) {
+                val updated = nextLookup[q.id] ?: q
+                if (updated != q) queueChanged = true
+                mapped.add(updated)
+            }
+            if (queueChanged) mapped else currentState.queue
+        }
+        if (queueChanged) {
+            cachedQueue = nextQueue
+            _uiState.update { state ->
+                state.copy(
+                    currentTrack = state.currentTrack?.let { nextLookup[it.id] ?: it },
+                    queue = if (state.queue === currentState.queue) nextQueue else state.queue.map { q -> nextLookup[q.id] ?: q }
+                )
+            }
         }
     }
 
@@ -531,6 +667,9 @@ class PlaybackController(
     fun setTrackFavorite(trackId: String, isFavorite: Boolean) {
         trackLookup[trackId]?.let { existing ->
             trackLookup = trackLookup + (trackId to existing.copy(isFavorite = isFavorite))
+        }
+        cachedQueue = cachedQueue.map { q ->
+            if (q.id == trackId) q.copy(isFavorite = isFavorite) else q
         }
         _uiState.update { state ->
             val updatedCurrent = state.currentTrack?.let { current ->
@@ -543,6 +682,85 @@ class PlaybackController(
         }
     }
 
+    fun restoreSavedSessionOnLibraryReady(libraryTracks: List<AudioTrack>) {
+        if (libraryTracks.isEmpty()) return
+        if (userHasInitiatedPlayback || hasRestoredFullLibrarySession) return
+        pendingLibraryTracksForRestore = libraryTracks
+
+        val controller = mediaController ?: return
+        if (controller.isPlaying || controller.playWhenReady) {
+            hasRestoredFullLibrarySession = true
+            return
+        }
+        applyFullLibrarySessionRestore(controller, libraryTracks)
+    }
+
+    private fun applyFullLibrarySessionRestore(
+        controller: MediaController,
+        libraryTracks: List<AudioTrack>
+    ) {
+        if (userHasInitiatedPlayback || hasRestoredFullLibrarySession) return
+        val exact = prefsStore.loadExactPlaybackSession()
+        if (exact == null) {
+            hasRestoredFullLibrarySession = true
+            restoreSavedSessionIfIdle(controller)
+            syncFromPlayer(controller)
+            return
+        }
+        val plan = PlaybackSessionRestorePlanner.buildPlan(exact, libraryTracks)
+        hasRestoredFullLibrarySession = true
+        restoredSessionAttempted = true
+        if (plan == null) {
+            restoreSavedSessionIfIdle(controller)
+            syncFromPlayer(controller)
+            return
+        }
+
+        trackLookup = trackLookup + libraryTracks.associateBy { it.id }
+        val tracks = plan.tracks
+        val safeIndex = plan.startIndex.coerceIn(0, tracks.lastIndex)
+        val windowStart = if (tracks.size <= MAX_IPC_QUEUE_SIZE) {
+            0
+        } else {
+            (safeIndex - MAX_IPC_QUEUE_SIZE / 2).coerceIn(0, tracks.size - MAX_IPC_QUEUE_SIZE)
+        }
+        val windowEnd = (windowStart + MAX_IPC_QUEUE_SIZE).coerceAtMost(tracks.size)
+        val windowedTracks = tracks.subList(windowStart, windowEnd)
+        val adjustedIndex = (safeIndex - windowStart).coerceIn(0, windowedTracks.lastIndex)
+
+        fullQueueTrackIds = tracks.map { it.id }
+        fullQueueWindowOffset = windowStart
+        populateQueueCacheFromTracks(windowedTracks)
+        hasPersistedExactStructure = true
+
+        isRestoringSession = true
+        try {
+            controller.playWhenReady = false
+            controller.shuffleModeEnabled = plan.shuffleEnabled
+            controller.repeatMode = plan.repeatMode
+            controller.setMediaItems(
+                windowedTracks.map { it.toMediaItem() },
+                adjustedIndex,
+                plan.positionMs
+            )
+            controller.prepare()
+        } finally {
+            isRestoringSession = false
+        }
+        syncFromPlayer(controller, timelineChanged = false)
+        val restoredDuration = windowedTracks.getOrNull(adjustedIndex)?.durationMs ?: 0L
+        _positionState.value = PlaybackPositionState(
+            positionMs = plan.positionMs,
+            durationMs = restoredDuration.coerceAtLeast(0L)
+        )
+        _uiState.update { state ->
+            state.copy(
+                isPlaying = false,
+                positionMs = plan.positionMs
+            )
+        }
+    }
+
     private fun restoreSavedSessionIfIdle(controller: MediaController) {
         if (restoredSessionAttempted || controller.mediaItemCount > 0) return
         restoredSessionAttempted = true
@@ -550,10 +768,182 @@ class PlaybackController(
         if (saved.items.isEmpty()) return
         val items = saved.items.map { prefsStore.savedItemToMediaItem(it) }
         val idx = saved.currentIndex.coerceIn(0, items.lastIndex)
-        controller.shuffleModeEnabled = saved.shuffleEnabled
-        controller.repeatMode = saved.repeatMode
-        controller.setMediaItems(items, idx, saved.positionMs)
-        controller.prepare()
+        queueCacheDirty = true
+        isRestoringSession = true
+        try {
+            controller.playWhenReady = false
+            controller.shuffleModeEnabled = saved.shuffleEnabled
+            controller.repeatMode = saved.repeatMode
+            controller.setMediaItems(items, idx, saved.positionMs)
+            controller.prepare()
+        } finally {
+            isRestoringSession = false
+        }
+    }
+
+    private fun populateQueueCacheFromTracks(windowedTracks: List<AudioTrack>) {
+        cachedQueue = windowedTracks.toList()
+        cachedWindowIds = windowedTracks.map { it.id }
+        queueCacheDirty = false
+    }
+
+    private fun ensureQueueCacheFromPlayer(player: Player): List<AudioTrack> {
+        val count = player.mediaItemCount
+        if (!queueCacheDirty && cachedQueue.size == count && cachedWindowIds.size == count) {
+            return cachedQueue
+        }
+        val tracks = ArrayList<AudioTrack>(count)
+        val ids = ArrayList<String>(count)
+        for (i in 0 until count) {
+            val item = runCatching { player.getMediaItemAt(i) }.getOrNull() ?: continue
+            val resolved = resolveTrackFromMediaItem(item)
+            if (resolved != null) {
+                tracks.add(resolved)
+                ids.add(resolved.id)
+            } else {
+                ids.add(item.mediaMetadata.extras?.getString(EXTRA_TRACK_ID) ?: item.mediaId)
+            }
+        }
+        cachedQueue = tracks
+        cachedWindowIds = ids
+        queueCacheDirty = false
+        return tracks
+    }
+
+    private fun AudioTrack.toSavedSnapshot(): SavedMediaItemSnapshot {
+        return SavedMediaItemSnapshot(
+            id = id,
+            contentUri = contentUri,
+            title = title,
+            artist = artist,
+            album = album,
+            albumArtUri = albumArtUri,
+            formatName = format.name,
+            durationMs = durationMs
+        )
+    }
+
+    private fun persistExactSessionSnapshot(
+        controller: Player,
+        overridePositionMs: Long? = null,
+        queueStructureChanged: Boolean = false
+    ) {
+        if (isRestoringSession) return
+        val count = controller.mediaItemCount
+        if (count <= 0) return
+        val rawIndex = controller.currentMediaItemIndex.coerceIn(0, count - 1)
+        val queue = ensureQueueCacheFromPlayer(controller)
+        val currentTrack = queue.getOrNull(rawIndex)
+        val currentId = currentTrack?.id ?: run {
+            val currentItem = runCatching { controller.getMediaItemAt(rawIndex) }.getOrNull() ?: return
+            currentItem.mediaMetadata.extras?.getString(EXTRA_TRACK_ID) ?: currentItem.mediaId
+        }
+        if (currentId.isBlank()) return
+
+        val pos = (overridePositionMs ?: controller.currentPosition).coerceAtLeast(0L)
+        val shuffle = controller.shuffleModeEnabled
+        val repeat = controller.repeatMode
+        val windowIds = cachedWindowIds
+        val (queueIds, resolvedIndex) = if (
+            fullQueueTrackIds.isNotEmpty() &&
+            fullQueueWindowOffset + rawIndex in fullQueueTrackIds.indices &&
+            fullQueueTrackIds[fullQueueWindowOffset + rawIndex] == currentId
+        ) {
+            fullQueueTrackIds to (fullQueueWindowOffset + rawIndex)
+        } else {
+            val safeIdx = rawIndex.coerceIn(0, (windowIds.size - 1).coerceAtLeast(0))
+            windowIds to safeIdx
+        }
+
+        // Fast path: when queue structure is unchanged and already persisted, update only lightweight fields in IO
+        if (!queueStructureChanged && hasPersistedExactStructure) {
+            persistSnapshotJob?.cancel()
+            persistSnapshotJob = scope.launch(Dispatchers.IO) {
+                val updated = prefsStore.updateExactPosition(
+                    trackId = currentId,
+                    queueIndex = resolvedIndex,
+                    positionMs = pos,
+                    shuffleEnabled = shuffle,
+                    repeatMode = repeat
+                )
+                if (!updated) {
+                    val snapshots = buildSnapshotsAroundIndex(queue, rawIndex)
+                    writeFullExactAndSavedSession(
+                        currentId = currentId,
+                        queueIds = queueIds,
+                        resolvedIndex = resolvedIndex,
+                        pos = pos,
+                        shuffle = shuffle,
+                        repeat = repeat,
+                        snapshots = snapshots
+                    )
+                }
+            }
+            return
+        }
+
+        val snapshots = buildSnapshotsAroundIndex(queue, rawIndex)
+        hasPersistedExactStructure = true
+        persistSnapshotJob?.cancel()
+        persistSnapshotJob = scope.launch(Dispatchers.IO) {
+            writeFullExactAndSavedSession(
+                currentId = currentId,
+                queueIds = queueIds,
+                resolvedIndex = resolvedIndex,
+                pos = pos,
+                shuffle = shuffle,
+                repeat = repeat,
+                snapshots = snapshots
+            )
+        }
+    }
+
+    private fun buildSnapshotsAroundIndex(
+        queue: List<AudioTrack>,
+        rawIndex: Int
+    ): List<SavedMediaItemSnapshot> {
+        if (queue.isEmpty()) return emptyList()
+        return if (queue.size <= 50) {
+            queue.map { it.toSavedSnapshot() }
+        } else {
+            val half = 25
+            val start = (rawIndex - half).coerceIn(0, queue.size - 50)
+            val end = (start + 50).coerceAtMost(queue.size)
+            queue.subList(start, end).map { it.toSavedSnapshot() }
+        }
+    }
+
+    private fun writeFullExactAndSavedSession(
+        currentId: String,
+        queueIds: List<String>,
+        resolvedIndex: Int,
+        pos: Long,
+        shuffle: Boolean,
+        repeat: Int,
+        snapshots: List<SavedMediaItemSnapshot>
+    ) {
+        prefsStore.saveExactPlaybackSession(
+            ExactPlaybackSession(
+                lastTrackId = currentId,
+                lastQueueTrackIds = queueIds,
+                lastQueueIndex = resolvedIndex,
+                lastPositionMs = pos,
+                shuffleEnabled = shuffle,
+                repeatMode = repeat
+            )
+        )
+        if (snapshots.isNotEmpty()) {
+            val snapIdx = snapshots.indexOfFirst { it.id == currentId }.takeIf { it >= 0 } ?: 0
+            prefsStore.savePlaybackSession(
+                SavedPlaybackSession(
+                    items = snapshots,
+                    currentIndex = snapIdx,
+                    positionMs = pos,
+                    shuffleEnabled = shuffle,
+                    repeatMode = repeat
+                )
+            )
+        }
     }
 
     private fun sendAudioSettingsToService(
@@ -599,27 +989,30 @@ class PlaybackController(
         }
     }
 
-    private fun syncFromPlayer(player: Player) {
-        val count = player.mediaItemCount
-        val queue = buildList(count) {
-            for (i in 0 until count) {
-                val item = runCatching { player.getMediaItemAt(i) }.getOrNull() ?: continue
-                resolveTrackFromMediaItem(item)?.let { add(it) }
-            }
+    private fun syncFromPlayer(player: Player, timelineChanged: Boolean = false) {
+        if (timelineChanged) {
+            queueCacheDirty = true
         }
+        val queue = ensureQueueCacheFromPlayer(player)
         val currentIdx = player.currentMediaItemIndex.takeIf { it in queue.indices } ?: -1
         val currentTrack = if (currentIdx >= 0) queue[currentIdx] else null
         val duration = player.duration.takeIf { it > 0 } ?: (currentTrack?.durationMs ?: 0L)
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val safeDur = duration.coerceAtLeast(0L)
         val previousTrackId = _uiState.value.currentTrack?.id
 
+        _positionState.value = PlaybackPositionState(
+            positionMs = pos,
+            durationMs = safeDur
+        )
         _uiState.update {
             it.copy(
                 currentTrack = currentTrack,
                 queue = queue,
                 currentIndex = currentIdx,
                 isPlaying = player.isPlaying,
-                positionMs = player.currentPosition.coerceAtLeast(0L),
-                durationMs = duration.coerceAtLeast(0L),
+                positionMs = pos,
+                durationMs = safeDur,
                 shuffleEnabled = player.shuffleModeEnabled,
                 repeatMode = player.repeatMode
             )
@@ -735,11 +1128,19 @@ class PlaybackController(
                 if (!controller.isPlaying) break
                 val pos = controller.currentPosition.coerceAtLeast(0L)
                 val currentTrack = _uiState.value.currentTrack
-                val dur = controller.duration.takeIf { it > 0 }
-                    ?: (currentTrack?.durationMs ?: 0L)
-                _uiState.update { it.copy(positionMs = pos, durationMs = dur) }
+                val dur = (controller.duration.takeIf { it > 0 }
+                    ?: (currentTrack?.durationMs ?: 0L)).coerceAtLeast(0L)
+                _positionState.value = PlaybackPositionState(
+                    positionMs = pos,
+                    durationMs = dur
+                )
                 if (currentTrack != null && dur > 0L) {
                     maybeSendLastFmScrobble(currentTrack, pos, dur)
+                }
+                val now = System.currentTimeMillis()
+                if (now - lastPeriodicExactSaveMs >= 5_000L) {
+                    lastPeriodicExactSaveMs = now
+                    persistExactSessionSnapshot(controller, overridePositionMs = pos, queueStructureChanged = false)
                 }
                 delay(350L)
             }

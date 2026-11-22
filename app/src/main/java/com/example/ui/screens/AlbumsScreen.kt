@@ -215,7 +215,7 @@ fun AlbumsScreen(
                             }
                         }
                     }
-                    itemsIndexed(detail.tracks, key = { _, t -> t.id }) { index, track ->
+                    itemsIndexed(detail.tracks, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { index, track ->
                         val isCurrent = playbackState.currentTrack?.id == track.id
                         TrackRow(
                             track = track,
@@ -304,7 +304,7 @@ fun AlbumsScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(bottom = 8.dp)
         ) {
-            items(CollectionTab.entries) { tab ->
+            items(CollectionTab.entries, key = { it.name }, contentType = { "collection_tab" }) { tab ->
                 val isSelected = selectedTab == tab
                 FilterChip(
                     selected = isSelected,
@@ -340,7 +340,7 @@ fun AlbumsScreen(
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(albums, key = { it.albumName }) { album ->
+                        items(albums, key = { it.albumName }, contentType = { "album_card" }) { album ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -421,7 +421,7 @@ fun AlbumsScreen(
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(artists, key = { it.artistName }) { artist ->
+                            items(artists, key = { it.artistName }, contentType = { "artist_row" }) { artist ->
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -497,7 +497,7 @@ fun AlbumsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(genres, key = { it.genreName }) { genre ->
+                        items(genres, key = { it.genreName }, contentType = { "genre_row" }) { genre ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -568,7 +568,7 @@ fun AlbumsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(folders, key = { it.folderName }) { folder ->
+                        items(folders, key = { it.folderName }, contentType = { "folder_row" }) { folder ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -765,7 +765,7 @@ fun AlbumDetailScreen(
                     }
                 }
 
-                itemsIndexed(album.tracks, key = { _, t -> t.id }) { index, track ->
+                itemsIndexed(album.tracks, key = { _, t -> t.id }, contentType = { _, _ -> "track" }) { index, track ->
                     val isCurrent = playbackState.currentTrack?.id == track.id
                     TrackRow(
                         track = track,

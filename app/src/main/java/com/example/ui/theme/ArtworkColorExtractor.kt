@@ -8,6 +8,9 @@ import android.net.Uri
 import android.util.LruCache
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
@@ -17,6 +20,7 @@ import kotlinx.coroutines.withContext
 object ArtworkColorExtractor {
 
     private val colorCache = LruCache<String, Color>(32)
+    private val extractionSemaphore = Semaphore(permits = 2)
 
     fun trimMemory(level: Int) {
         when {
@@ -30,20 +34,28 @@ object ArtworkColorExtractor {
         audioUri: String,
         albumArtUri: String?,
         fallbackColor: Color
-    ): Color = withContext(Dispatchers.IO) {
+    ): Color {
         val cacheKey = "$audioUri|$albumArtUri"
-        colorCache.get(cacheKey)?.let { return@withContext it }
+        colorCache.get(cacheKey)?.let { return it }
 
-        val bitmap = decodeSmallArtwork(context, audioUri, albumArtUri) ?: return@withContext fallbackColor
-        val extracted = try {
-            computeDominantVibrantColor(bitmap, fallbackColor)
-        } finally {
-            if (!bitmap.isRecycled) {
-                bitmap.recycle()
+        return withContext(Dispatchers.IO) {
+            colorCache.get(cacheKey)?.let { return@withContext it }
+            extractionSemaphore.withPermit {
+                ensureActive()
+                colorCache.get(cacheKey)?.let { return@withPermit it }
+                val bitmap = decodeSmallArtwork(context, audioUri, albumArtUri) ?: return@withPermit fallbackColor
+                val extracted = try {
+                    ensureActive()
+                    computeDominantVibrantColor(bitmap, fallbackColor)
+                } finally {
+                    if (!bitmap.isRecycled) {
+                        bitmap.recycle()
+                    }
+                }
+                colorCache.put(cacheKey, extracted)
+                extracted
             }
         }
-        colorCache.put(cacheKey, extracted)
-        extracted
     }
 
     private const val MAX_IMAGE_STREAM_BYTES = 6 * 1024 * 1024

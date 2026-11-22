@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackLyricsEntity::class,
         TrackLyricsTranslationEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class SonoraDatabase : RoomDatabase() {
@@ -108,6 +108,14 @@ abstract class SonoraDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `track_lyrics` ADD COLUMN `offsetMs` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): SonoraDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -115,7 +123,7 @@ abstract class SonoraDatabase : RoomDatabase() {
                     SonoraDatabase::class.java,
                     "sonora_music.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

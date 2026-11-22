@@ -1,8 +1,10 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,12 +43,15 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,7 +75,9 @@ fun Media3FloatingBottomBar(
     player: Player,
     modifier: Modifier = Modifier,
     accentOverride: Color? = null,
-    onOpenNowPlaying: (() -> Unit)? = null
+    onOpenNowPlaying: (() -> Unit)? = null,
+    onSkipNext: (() -> Unit)? = null,
+    onSkipPrevious: (() -> Unit)? = null
 ) {
     var hasCurrentTrack by remember(player) { mutableStateOf(player.currentMediaItem != null) }
     var isPlaying by remember(player) { mutableStateOf(player.isPlaying || player.playWhenReady) }
@@ -87,7 +94,6 @@ fun Media3FloatingBottomBar(
         val currentItem = player.currentMediaItem
         hasCurrentTrack = currentItem != null
         isPlaying = player.isPlaying || player.playWhenReady
-        positionMs = player.currentPosition.coerceAtLeast(0L)
         durationMs = player.duration.coerceAtLeast(0L)
 
         val meta = currentItem?.mediaMetadata ?: player.mediaMetadata
@@ -114,7 +120,17 @@ fun Media3FloatingBottomBar(
         syncFromPlayer()
         val listener = object : Player.Listener {
             override fun onEvents(p: Player, events: Player.Events) {
-                syncFromPlayer()
+                if (events.containsAny(
+                        Player.EVENT_TIMELINE_CHANGED,
+                        Player.EVENT_MEDIA_ITEM_TRANSITION,
+                        Player.EVENT_MEDIA_METADATA_CHANGED,
+                        Player.EVENT_IS_PLAYING_CHANGED,
+                        Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                        Player.EVENT_PLAYBACK_STATE_CHANGED
+                    )
+                ) {
+                    syncFromPlayer()
+                }
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -137,32 +153,49 @@ fun Media3FloatingBottomBar(
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player, isPlaying, hasCurrentTrack) {
-        if (!hasCurrentTrack) return@LaunchedEffect
-        positionMs = player.currentPosition.coerceAtLeast(0L)
-        val initialDur = player.duration
-        if (initialDur > 0L) durationMs = initialDur
-        if (!isPlaying) return@LaunchedEffect
-        while (isActive) {
-            delay(500L)
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            val pDur = player.duration
-            if (pDur > 0L) durationMs = pDur
-        }
-    }
-
     if (!hasCurrentTrack) return
 
     val defaultAccent = if (format == AudioFormat.FLAC || format == AudioFormat.WAV) LosslessCyan else CopperAmber
     val accentColor = accentOverride ?: defaultAccent
-    val progress = if (durationMs > 0L) {
-        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-    } else 0f
-    val subtitle = listOf(artist, album).filter { it.isNotBlank() }.joinToString(" · ")
+    val subtitle = remember(artist, album) {
+        listOf(artist, album).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
+    var swipeOffsetX by remember { mutableFloatStateOf(0f) }
+    val animatedSwipeX by animateFloatAsState(targetValue = swipeOffsetX, label = "floating_bar_swipe")
+    val currentOnSkipNext by rememberUpdatedState(onSkipNext)
+    val currentOnSkipPrevious by rememberUpdatedState(onSkipPrevious)
 
     Surface(
         modifier = modifier
             .fillMaxWidth()
+            .graphicsLayer { translationX = animatedSwipeX * 0.35f }
+            .pointerInput(player) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        totalDrag += dragAmount
+                        swipeOffsetX = totalDrag.coerceIn(-140f, 140f)
+                    },
+                    onDragEnd = {
+                        if (totalDrag < -80f) {
+                            currentOnSkipNext?.invoke() ?: run {
+                                if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+                            }
+                        } else if (totalDrag > 80f) {
+                            currentOnSkipPrevious?.invoke() ?: run {
+                                if (player.currentPosition > 3500L) player.seekTo(0L)
+                                else if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+                                else player.seekTo(0L)
+                            }
+                        }
+                        swipeOffsetX = 0f
+                    },
+                    onDragCancel = { swipeOffsetX = 0f }
+                )
+            }
             .shadow(
                 elevation = 14.dp,
                 shape = RoundedCornerShape(22.dp),
@@ -291,16 +324,53 @@ fun Media3FloatingBottomBar(
                 }
             }
 
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp),
-                color = accentColor,
-                trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+            Media3BottomBarProgressIndicator(
+                player = player,
+                isPlaying = isPlaying,
+                fallbackDurationMs = durationMs,
+                accentColor = accentColor
             )
         }
     }
+}
+
+@Composable
+private fun Media3BottomBarProgressIndicator(
+    player: Player,
+    isPlaying: Boolean,
+    fallbackDurationMs: Long,
+    accentColor: Color
+) {
+    var positionMs by remember(player) { mutableLongStateOf(player.currentPosition.coerceAtLeast(0L)) }
+    var durationMs by remember(player, fallbackDurationMs) {
+        mutableLongStateOf(player.duration.takeIf { it > 0L } ?: fallbackDurationMs.coerceAtLeast(0L))
+    }
+
+    LaunchedEffect(player, isPlaying, fallbackDurationMs) {
+        positionMs = player.currentPosition.coerceAtLeast(0L)
+        val initialDur = player.duration
+        if (initialDur > 0L) durationMs = initialDur
+        if (!isPlaying) return@LaunchedEffect
+        while (isActive) {
+            delay(500L)
+            positionMs = player.currentPosition.coerceAtLeast(0L)
+            val pDur = player.duration
+            if (pDur > 0L) durationMs = pDur
+        }
+    }
+
+    val progress = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+    LinearProgressIndicator(
+        progress = { progress },
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(2.5.dp),
+        color = accentColor,
+        trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    )
 }
 
 /**

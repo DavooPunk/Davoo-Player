@@ -4,7 +4,29 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.4 (Actual — Compilación 9)
+## v2.0.5 (Actual — Compilación 10)
+
+### Visor de Letras Inmersivo y Navegación Libre (Estilo Spotify)
+- **Pantalla completa sin cierres accidentales**: reemplaza el contenedor deslizable por una vista inmersiva a pantalla completa con transición vertical suave, botón superior izquierdo de cierre explícito (`KeyboardArrowDown`) y título/artista centrados sobre el color dinámico de la carátula.
+- **Pausa inteligente del auto-scroll**: al desplazarte manualmente por la letra se pausa el seguimiento automático durante ~4.5 segundos manteniendo iluminada la frase activa y mostrando la píldora flotante **«Sincronizar»** (también puedes reanudar tocando cualquier línea).
+
+### Calibración de Sincronización (`±0.5s`) y Exportación `.lrc`
+- **Offset por canción (`-0.5s` / `0.0s` / `+0.5s`)**: ajusta en vivo el adelanto o retraso de letras desincronizadas con persistencia por pista en la base de datos local (Room `v5`).
+- **Exportar y compartir `.lrc`**: guarda el archivo `.lrc` en tu almacenamiento con el selector del sistema (SAF) o compártelo directamente vía `FileProvider`, eligiendo formato **Original** o **Bilingüe** con los tiempos ya corregidos por el offset.
+
+### Reanudación Exacta y Reproductor Refinado
+- **Reanudación exacta de sesión al iniciar**: guarda la última pista, toda la cola en orden, posición exacta en milisegundos, modo aleatorio y repetición para restaurarlos en pausa al volver a abrir la app (sin auto-play indeseado).
+- **Interfaz de reproducción ajustada y sin botones de 10 segundos**: se eliminaron los botones de retroceder/adelantar 10 segundos y se adaptó automáticamente el tamaño de la carátula y los espaciados para que todos los controles encajen sin cortes en pantalla.
+- **Gestos en mini reproductor y accesos en Reproduciendo ahora**: desliza horizontalmente el mini reproductor inferior para cambiar a la pista siguiente o anterior, y toca los accesos de **Artista** o **Álbum** en la pantalla *Reproduciendo ahora* para saltar directo a su colección.
+
+### Estabilidad, Fluidez y Cero Tirones
+- **Ticker de progreso desacoplado (`PlaybackPositionState`)**: la barra de tiempo actualiza únicamente los controles de tiempo y el deslizador cada 350 ms, evitando recomponer toda la biblioteca, colas y menús durante la reproducción.
+- **Caché de sesión e IPC en segundo plano**: caché en memoria de la cola y la sesión guardada con actualización ligera de posición (`updateExactPosition`), evitando lecturas Binder repetidas en el hilo principal y re-serializaciones de hasta 2,500 pistas.
+- **Renderizado y concurrencia optimizados**: barras de ecualizador animadas con `graphicsLayer.scaleY` sin relayouts, semáforos de concurrencia (`Semaphore`) al extraer duraciones y colores de carátula, e hints `contentType` en listas para un scroll uniforme sin tirones.
+
+---
+
+## v2.0.4 (Compilación 9)
 
 ### Crossfade Real y Colores Adaptativos en Letras
 - **Crossfade configurable entre canciones (0 a 12 s)**: reproducción solapada de doble canal mediante curva *equal-power* para mantener el volumen constante, ecualizador/balance DSP aplicados en la mezcla, respeto por etiquetas ReplayGain y control continuo desde *Opciones* y *Ecualizador*.

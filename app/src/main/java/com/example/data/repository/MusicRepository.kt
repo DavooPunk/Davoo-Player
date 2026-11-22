@@ -426,9 +426,63 @@ class MusicRepository(
     suspend fun loadLyrics(track: AudioTrack): LyricsData? = withContext(Dispatchers.IO) {
         val saved = runCatching { trackLyricsDao.getLyricsForTrack(track.id) }.getOrNull()
         if (saved != null) {
-            AudioTagParsers.parseLrcText(saved.rawLrcText, saved.sourceLabel)?.let { return@withContext it }
+            AudioTagParsers.parseLrcText(saved.rawLrcText, saved.sourceLabel)
+                ?.let { return@withContext it.copy(offsetMs = saved.offsetMs) }
         }
         AudioTagParsers.extractLyricsForTrack(context, track)
+    }
+
+    suspend fun saveLyricsOffset(
+        track: AudioTrack,
+        currentLyrics: LyricsData,
+        newOffsetMs: Long
+    ): LyricsData = withContext(Dispatchers.IO) {
+        val clamped = newOffsetMs.coerceIn(-60_000L, 60_000L)
+        runCatching {
+            val updatedRows = trackLyricsDao.updateOffset(track.id, clamped)
+            if (updatedRows == 0) {
+                val baseLyrics = currentLyrics.copy(offsetMs = 0L)
+                val rawLrc = AudioTagParsers.exportLyricsToLrc(
+                    trackTitle = track.title,
+                    trackArtist = track.artist,
+                    trackAlbum = track.album,
+                    lyrics = baseLyrics,
+                    includeTranslation = currentLyrics.hasEmbeddedTranslation
+                )
+                trackLyricsDao.upsert(
+                    TrackLyricsEntity(
+                        trackId = track.id,
+                        rawLrcText = rawLrc,
+                        sourceLabel = currentLyrics.sourceLabel,
+                        offsetMs = clamped
+                    )
+                )
+            }
+        }
+        currentLyrics.copy(offsetMs = clamped)
+    }
+
+    suspend fun exportLyricsLrcToUri(uri: Uri, lrcContent: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
+                writer.write(lrcContent)
+            }
+            true
+        }.getOrDefault(false)
+    }
+
+    suspend fun createShareableLrcUri(fileName: String, lrcContent: String): Uri? = withContext(Dispatchers.IO) {
+        runCatching {
+            val shareDir = java.io.File(context.cacheDir, "lyrics_share").apply { mkdirs() }
+            val safeName = fileName.ifBlank { "letra.lrc" }
+            val outFile = java.io.File(shareDir, safeName)
+            outFile.writeText(lrcContent, Charsets.UTF_8)
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                outFile
+            )
+        }.getOrNull()
     }
 
     suspend fun loadAndSaveLyricsFromUri(trackId: String, uri: Uri): LyricsData? = withContext(Dispatchers.IO) {

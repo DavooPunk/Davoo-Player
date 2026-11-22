@@ -169,6 +169,68 @@ object AudioTagParsers {
         return translated.lines.joinToString(separator = "\n") { it.text.replace("\n", " ").trim() }
     }
 
+    fun formatLrcTimestamp(timestampMs: Long): String {
+        val safeMs = timestampMs.coerceAtLeast(0L)
+        val totalSeconds = safeMs / 1000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        val centis = (safeMs % 1000L) / 10L
+        return String.format("[%02d:%02d.%02d]", minutes, seconds, centis)
+    }
+
+    fun exportLyricsToLrc(
+        trackTitle: String,
+        trackArtist: String,
+        trackAlbum: String,
+        lyrics: LyricsData,
+        translatedLyrics: LyricsData? = null,
+        includeTranslation: Boolean = false
+    ): String {
+        val sb = StringBuilder()
+        if (trackTitle.isNotBlank()) sb.appendLine("[ti:${trackTitle.trim()}]")
+        if (trackArtist.isNotBlank()) sb.appendLine("[ar:${trackArtist.trim()}]")
+        if (trackAlbum.isNotBlank()) sb.appendLine("[al:${trackAlbum.trim()}]")
+        sb.appendLine("[by:Davoo Player]")
+
+        val offsetMs = lyrics.offsetMs
+        val transLines = translatedLyrics?.lines
+        lyrics.lines.forEachIndexed { idx, line ->
+            val cleanText = line.text.trim()
+            if (cleanText.isEmpty()) return@forEachIndexed
+            val translated = if (includeTranslation) {
+                (transLines?.getOrNull(idx)?.text ?: line.secondaryText)
+                    ?.trim()
+                    ?.takeIf { it.isNotEmpty() && !it.equals(cleanText, ignoreCase = true) }
+            } else null
+
+            val ts = line.timestampMs
+            if (lyrics.isSynced && ts != null) {
+                val adjustedMs = (ts - offsetMs).coerceAtLeast(0L)
+                val tag = formatLrcTimestamp(adjustedMs)
+                sb.appendLine("$tag$cleanText")
+                if (translated != null) {
+                    sb.appendLine("$tag$translated")
+                }
+            } else {
+                sb.appendLine(cleanText)
+                if (translated != null) {
+                    sb.appendLine(translated)
+                }
+            }
+        }
+        return sb.toString().trimEnd() + "\n"
+    }
+
+    fun buildSafeLrcFileName(artist: String, title: String): String {
+        val raw = listOf(artist.trim(), title.trim())
+            .filter { it.isNotBlank() }
+            .joinToString(" - ")
+            .ifBlank { "letra" }
+        val sanitized = raw.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().take(80).trimEnd('.')
+        val base = sanitized.ifBlank { "letra" }
+        return "$base.lrc"
+    }
+
     fun extractLyricsForTrack(context: Context, track: AudioTrack): LyricsData? {
         // 1. Check companion .lrc file on filesystem if path is known
         if (track.filePath.isNotBlank()) {

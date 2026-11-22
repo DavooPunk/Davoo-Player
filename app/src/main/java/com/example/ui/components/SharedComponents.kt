@@ -5,6 +5,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -15,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,6 +93,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -294,7 +297,11 @@ fun AnimatedEqualizerBars(
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .height((16f * frac).dp)
+                    .height(16.dp)
+                    .graphicsLayer {
+                        scaleY = frac.coerceIn(0.15f, 1f)
+                        transformOrigin = TransformOrigin(0.5f, 1f)
+                    }
                     .clip(RoundedCornerShape(2.dp))
                     .background(MaterialTheme.colorScheme.primary)
             )
@@ -328,7 +335,7 @@ fun TrackRow(
 
     val resolvedDurationMs = if (track.durationMs > 0L) {
         track.durationMs
-    } else {
+    } else if (track.contentUri.isNotBlank()) {
         val extracted by produceState(
             initialValue = 0L,
             key1 = track.contentUri
@@ -342,6 +349,8 @@ fun TrackRow(
             }
         }
         extracted
+    } else {
+        0L
     }
 
     val rowBackground = when {
@@ -468,6 +477,7 @@ fun TrackRow(
                     )
                 }
 
+            if (menuExpanded) {
             DropdownMenu(
                 expanded = menuExpanded,
                 onDismissRequest = { menuExpanded = false }
@@ -562,6 +572,7 @@ fun TrackRow(
                     )
                 }
             }
+            }
         }
         }
     }
@@ -573,17 +584,44 @@ fun MiniPlayerBar(
     onOpenNowPlaying: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSkipNext: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSkipPrevious: (() -> Unit)? = null
 ) {
     val track = playbackState.currentTrack ?: return
     val progress = if (playbackState.durationMs > 0L) {
         (playbackState.positionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
 
+    var swipeOffsetX by remember { mutableFloatStateOf(0f) }
+    val animatedSwipeX by animateFloatAsState(targetValue = swipeOffsetX, label = "mini_player_swipe")
+    val currentOnSkipNext by rememberUpdatedState(onSkipNext)
+    val currentOnSkipPrevious by rememberUpdatedState(onSkipPrevious)
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
+            .graphicsLayer { translationX = animatedSwipeX * 0.35f }
+            .pointerInput(track.id) {
+                var totalDrag = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { totalDrag = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        totalDrag += dragAmount
+                        swipeOffsetX = totalDrag.coerceIn(-140f, 140f)
+                    },
+                    onDragEnd = {
+                        if (totalDrag < -80f) {
+                            currentOnSkipNext()
+                        } else if (totalDrag > 80f) {
+                            currentOnSkipPrevious?.invoke()
+                        }
+                        swipeOffsetX = 0f
+                    },
+                    onDragCancel = { swipeOffsetX = 0f }
+                )
+            }
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onOpenNowPlaying)
             .testTag("mini_player_bar"),
@@ -812,7 +850,11 @@ fun BatchAddToPlaylistBottomSheet(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(playlists, key = { it.id }) { playlist ->
+                    items(
+                        items = playlists,
+                        key = { it.id },
+                        contentType = { "playlist_row" }
+                    ) { playlist ->
                         val existingCount = playlist.tracks.count { it.id in selectedIds }
                         val statusLabel = when {
                             tracks.size == 1 && existingCount == 1 ->
@@ -996,7 +1038,8 @@ fun QueueBottomSheet(
                 ) {
                     itemsIndexed(
                         items = visibleEntries,
-                        key = { _, entry -> entry.first }
+                        key = { _, entry -> entry.first },
+                        contentType = { _, _ -> "queue_track_row" }
                     ) { visualIndex, entry ->
                         val item = entry.second
                         val isCurrent = hasActiveIndex && visualIndex == 0

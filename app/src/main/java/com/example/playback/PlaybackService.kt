@@ -139,11 +139,20 @@ class PlaybackService : MediaLibraryService() {
     private var isAdvancingViaCrossfade: Boolean = false
     private var lastCrossfadeIncomingMediaId: String? = null
     private var lastCrossfadeAdvanceAtMs: Long = 0L
+    private var awaitingCrossfadeMediaTransition: Boolean = false
+    private var awaitingCrossfadeDiscontinuity: Boolean = false
     private var lastCrossfadeSourceKey: String? = null
     private var gapPauseJob: Job? = null
     private var isInTrackGapPause: Boolean = false
     private var persistSessionJob: Job? = null
     private var lastPersistedAtMs: Long = 0L
+    private var cachedTimelineCount: Int = -1
+    private var cachedWindowTrackIds: List<String> = emptyList()
+    private var cachedTimelineSnapshots: List<SavedMediaItemSnapshot> = emptyList()
+    private var cachedSnapshotWindowStart: Int = 0
+    private var cachedTimelineDirty: Boolean = true
+    private var hasPersistedExactStructureInService: Boolean = false
+    private var lastWidgetSignature: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -185,13 +194,18 @@ class PlaybackService : MediaLibraryService() {
                 effectsController.attachToSession(audioSessionId, currentSettings)
             }
 
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                cachedTimelineDirty = true
+                hasPersistedExactStructureInService = false
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                val triggeredByCrossfade = isCrossfadeInitiatedTransition(mediaItem?.mediaId)
+                val triggeredByCrossfade = consumeCrossfadeMediaTransition(mediaItem?.mediaId)
                 gapPauseJob?.cancel()
                 isInTrackGapPause = false
                 sessionPersistedOnStop = false
                 lastCrossfadeSourceKey = null
-                if (!triggeredByCrossfade && crossfadeFadeJob?.isActive == true) {
+                if (!triggeredByCrossfade && (activeFadeInActive || crossfadeFadeJob?.isActive == true)) {
                     stopCrossfadeFadeAndOutgoing(player)
                 }
                 refreshReplayGainAndVolume(player, mediaItem)
@@ -209,6 +223,10 @@ class PlaybackService : MediaLibraryService() {
                     gapPauseJob?.cancel()
                     isInTrackGapPause = false
                 }
+                if (!playWhenReady && (activeFadeInActive || crossfadeFadeJob?.isActive == true)) {
+                    crossfadeMonitorJob?.cancel()
+                    stopCrossfadeFadeAndOutgoing(player)
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -219,8 +237,10 @@ class PlaybackService : MediaLibraryService() {
                     sessionPersistedOnStop = false
                     startCrossfadeMonitor(player)
                 } else {
-                    crossfadeMonitorJob?.cancel()
-                    stopCrossfadeFadeAndOutgoing(player)
+                    if (shouldAbortCrossfadeOnIsPlayingChanged(player)) {
+                        crossfadeMonitorJob?.cancel()
+                        stopCrossfadeFadeAndOutgoing(player)
+                    }
                     persistCurrentSession(player)
                 }
                 if (isPlaying || !isInTrackGapPause) {
@@ -236,11 +256,15 @@ class PlaybackService : MediaLibraryService() {
                 sessionPersistedOnStop = false
                 persistCurrentSession(player)
                 val targetId = newPosition.mediaItem?.mediaId ?: player.currentMediaItem?.mediaId
-                if (reason == Player.DISCONTINUITY_REASON_SEEK &&
-                    !isCrossfadeInitiatedTransition(targetId) &&
-                    crossfadeFadeJob?.isActive == true
-                ) {
-                    stopCrossfadeFadeAndOutgoing(player)
+                val isFadeSeek = reason == Player.DISCONTINUITY_REASON_SEEK &&
+                    consumeCrossfadeDiscontinuity(targetId)
+                if (reason == Player.DISCONTINUITY_REASON_SEEK && !isFadeSeek) {
+                    if (oldPosition.mediaItemIndex == newPosition.mediaItemIndex) {
+                        lastCrossfadeSourceKey = null
+                    }
+                    if (activeFadeInActive || crossfadeFadeJob?.isActive == true) {
+                        stopCrossfadeFadeAndOutgoing(player)
+                    }
                 }
                 if (player.isPlaying) {
                     startCrossfadeMonitor(player)
@@ -614,10 +638,48 @@ class PlaybackService : MediaLibraryService() {
         return 10.0.pow(db / 20.0).toFloat().coerceIn(0.25f, 1.4f)
     }
 
-    private fun isCrossfadeInitiatedTransition(mediaId: String?): Boolean {
-        if (isAdvancingViaCrossfade) return true
-        if (mediaId != null && mediaId == lastCrossfadeIncomingMediaId) {
-            return (SystemClock.elapsedRealtime() - lastCrossfadeAdvanceAtMs) <= 450L
+    @androidx.annotation.VisibleForTesting
+    internal fun shouldAbortCrossfadeOnIsPlayingChanged(player: Player): Boolean {
+        return !player.playWhenReady ||
+            player.playbackState == Player.STATE_IDLE ||
+            player.playbackState == Player.STATE_ENDED ||
+            player.playbackSuppressionReason != Player.PLAYBACK_SUPPRESSION_REASON_NONE
+    }
+
+    private fun resolveTrackDurationMs(player: Player, item: MediaItem?): Long {
+        val playerDur = runCatching { player.duration }.getOrDefault(C.TIME_UNSET)
+        if (playerDur > 0L && playerDur != C.TIME_UNSET) return playerDur
+        return item?.mediaMetadata?.extras?.getLong(PlaybackController.EXTRA_DURATION_MS, 0L)?.takeIf { it > 0L } ?: 0L
+    }
+
+    private fun consumeCrossfadeMediaTransition(mediaId: String?): Boolean {
+        if (isAdvancingViaCrossfade) {
+            awaitingCrossfadeMediaTransition = false
+            return true
+        }
+        if (awaitingCrossfadeMediaTransition &&
+            mediaId != null &&
+            mediaId == lastCrossfadeIncomingMediaId &&
+            (SystemClock.elapsedRealtime() - lastCrossfadeAdvanceAtMs) <= 2_000L
+        ) {
+            awaitingCrossfadeMediaTransition = false
+            return true
+        }
+        return false
+    }
+
+    private fun consumeCrossfadeDiscontinuity(mediaId: String?): Boolean {
+        if (isAdvancingViaCrossfade) {
+            awaitingCrossfadeDiscontinuity = false
+            return true
+        }
+        if (awaitingCrossfadeDiscontinuity &&
+            mediaId != null &&
+            mediaId == lastCrossfadeIncomingMediaId &&
+            (SystemClock.elapsedRealtime() - lastCrossfadeAdvanceAtMs) <= 2_000L
+        ) {
+            awaitingCrossfadeDiscontinuity = false
+            return true
         }
         return false
     }
@@ -672,6 +734,8 @@ class PlaybackService : MediaLibraryService() {
         crossfadeFadeJob?.cancel()
         crossfadeFadeJob = null
         activeFadeInActive = false
+        awaitingCrossfadeMediaTransition = false
+        awaitingCrossfadeDiscontinuity = false
         if (!isServiceDestroyed) {
             runCatching { mainPlayer.volume = currentReplayGainMultiplier }
         }
@@ -696,12 +760,12 @@ class PlaybackService : MediaLibraryService() {
                 val settingsFadeSec = currentSettings.crossfadeSeconds
                 if (settingsFadeSec <= 0) break
 
-                val duration = runCatching { player.duration }.getOrDefault(0L)
+                val item = runCatching { player.currentMediaItem }.getOrNull()
+                val duration = resolveTrackDurationMs(player, item)
                 val pos = runCatching { player.currentPosition }.getOrDefault(0L)
                 val hasNext = runCatching { player.hasNextMediaItem() }.getOrDefault(false)
                 val repeatMode = runCatching { player.repeatMode }.getOrDefault(Player.REPEAT_MODE_OFF)
                 val speed = currentSettings.playbackSpeed.coerceAtLeast(0.5f)
-                val item = runCatching { player.currentMediaItem }.getOrNull()
                 val idx = runCatching { player.currentMediaItemIndex }.getOrDefault(-1)
                 val trackSourceKey = item?.let { "${it.mediaId}@$idx" }
                 val alreadyTriggeredForTrack = trackSourceKey != null && trackSourceKey == lastCrossfadeSourceKey
@@ -723,8 +787,8 @@ class PlaybackService : MediaLibraryService() {
                     lastCrossfadeSourceKey = trackSourceKey
                     val remainingWallMs = ((duration - pos).coerceAtLeast(0L) / speed).toLong()
                     val effectiveFadeMs = minOf(settingsFadeSec * 1000L, remainingWallMs)
-                        .coerceAtLeast(300L)
-                    launchOverlappingCrossfade(player, item, effectiveFadeMs)
+                        .coerceAtLeast(350L)
+                    launchOverlappingCrossfade(player, item, duration, effectiveFadeMs)
                     break
                 }
 
@@ -742,26 +806,32 @@ class PlaybackService : MediaLibraryService() {
     private fun launchOverlappingCrossfade(
         mainPlayer: Player,
         outgoingItem: MediaItem,
+        outgoingDurationMs: Long,
         fadeWallMs: Long
     ) {
         crossfadeFadeJob?.cancel()
         crossfadeFadeJob = serviceScope.launch {
-            performOverlappingCrossfade(mainPlayer, outgoingItem, fadeWallMs)
+            performOverlappingCrossfade(mainPlayer, outgoingItem, outgoingDurationMs, fadeWallMs)
         }
     }
 
     private suspend fun performOverlappingCrossfade(
         mainPlayer: Player,
         outgoingItem: MediaItem,
+        outgoingDurationMs: Long,
         fadeWallMs: Long
     ) {
         val speed = currentSettings.playbackSpeed.coerceAtLeast(0.5f)
         val outgoingBaseGain = currentReplayGainMultiplier
-        val startPosMs = runCatching { mainPlayer.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
+        val prePosMs = runCatching { mainPlayer.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
         val incomingItem = runCatching {
             val nextIdx = mainPlayer.nextMediaItemIndex
             if (nextIdx != C.INDEX_UNSET) mainPlayer.getMediaItemAt(nextIdx) else null
         }.getOrNull() ?: return
+
+        val prewarmLeadMs = 300L
+        val maxSafeCuePos = (outgoingDurationMs - 450L).coerceAtLeast(prePosMs)
+        var targetCuePosMs = (prePosMs + prewarmLeadMs).coerceAtMost(maxSafeCuePos)
 
         val outgoing = getOrCreateOutgoingPlayer()
         outgoingEqProcessor.updateSettings(
@@ -772,29 +842,99 @@ class PlaybackService : MediaLibraryService() {
         outgoingBalanceProcessor.setBalance(currentSettings.stereoBalance)
         runCatching {
             outgoing.setPlaybackParameters(PlaybackParameters(speed))
-            outgoing.volume = outgoingBaseGain
-            outgoing.setMediaItem(outgoingItem, startPosMs + 30L)
+            outgoing.volume = 0f
+            outgoing.playWhenReady = false
+            outgoing.setMediaItem(outgoingItem, targetCuePosMs)
             outgoing.prepare()
-            outgoing.play()
         }
 
-        // Brief warm-up up to 120ms so outgoing decoder is ready before advancing mainPlayer
-        var waitedMs = 0L
-        while (!isServiceDestroyed && waitedMs < 120L) {
+        // Wait silently while mainPlayer keeps playing outgoingItem uninterrupted until outgoing decoder is ready
+        var waitedReadyMs = 0L
+        var outgoingReady = false
+        while (!isServiceDestroyed && waitedReadyMs < 1_200L) {
+            val mainPlaying = runCatching {
+                mainPlayer.isPlaying && mainPlayer.currentMediaItem?.mediaId == outgoingItem.mediaId
+            }.getOrDefault(false)
+            if (!mainPlaying) {
+                stopOutgoingPlayer(outgoing)
+                return
+            }
+            val remainingNow = (outgoingDurationMs - runCatching { mainPlayer.currentPosition }.getOrDefault(0L))
+            if (remainingNow < 400L) {
+                stopOutgoingPlayer(outgoing)
+                return
+            }
             val state = runCatching { outgoing.playbackState }.getOrDefault(Player.STATE_IDLE)
-            if (state == Player.STATE_READY) break
+            if (state == Player.STATE_READY) {
+                outgoingReady = true
+                break
+            }
+            if (state == Player.STATE_ENDED || state == Player.STATE_IDLE) break
             delay(10L)
-            waitedMs += 10L
+            waitedReadyMs += 10L
         }
 
-        if (isServiceDestroyed || !runCatching { mainPlayer.isPlaying }.getOrDefault(false)) {
+        if (!outgoingReady || isServiceDestroyed) {
             stopOutgoingPlayer(outgoing)
             return
         }
 
+        // Synchronize outgoing position accurately with mainPlayer before starting AudioTrack
+        val currentMainPos = runCatching { mainPlayer.currentPosition }.getOrDefault(0L)
+        if (currentMainPos > targetCuePosMs + 60L) {
+            targetCuePosMs = (currentMainPos + 65L).coerceAtMost((outgoingDurationMs - 320L).coerceAtLeast(0L))
+            runCatching { outgoing.seekTo(targetCuePosMs) }
+            var reSeekWaitMs = 0L
+            while (!isServiceDestroyed && reSeekWaitMs < 250L) {
+                if (runCatching { outgoing.playbackState == Player.STATE_READY }.getOrDefault(false)) break
+                delay(10L)
+                reSeekWaitMs += 10L
+            }
+        } else if (currentMainPos < targetCuePosMs - 40L) {
+            var syncWaitMs = 0L
+            while (!isServiceDestroyed && syncWaitMs < 400L) {
+                val posNow = runCatching { mainPlayer.currentPosition }.getOrDefault(0L)
+                if (posNow >= targetCuePosMs - 30L) break
+                if (!runCatching { mainPlayer.isPlaying }.getOrDefault(false)) {
+                    stopOutgoingPlayer(outgoing)
+                    return
+                }
+                delay(10L)
+                syncWaitMs += 10L
+            }
+        }
+
+        // Start outgoing audio pipeline silently so it is actively outputting frames on handoff
+        runCatching {
+            outgoing.volume = 0f
+            outgoing.play()
+        }
+        var playStartWaitMs = 0L
+        while (!isServiceDestroyed && playStartWaitMs < 150L) {
+            if (runCatching { outgoing.isPlaying }.getOrDefault(false)) break
+            delay(10L)
+            playStartWaitMs += 10L
+        }
+
+        val stillValidBeforeHandoff = !isServiceDestroyed &&
+            runCatching {
+                mainPlayer.isPlaying && mainPlayer.currentMediaItem?.mediaId == outgoingItem.mediaId
+            }.getOrDefault(false)
+        if (!stillValidBeforeHandoff) {
+            stopOutgoingPlayer(outgoing)
+            return
+        }
+
+        val handoffPosMs = runCatching { mainPlayer.currentPosition }.getOrDefault(0L)
+        val remainingAtHandoffWallMs = ((outgoingDurationMs - handoffPosMs).coerceAtLeast(350L) / speed).toLong()
+        val actualFadeWallMs = minOf(fadeWallMs, remainingAtHandoffWallMs).coerceAtLeast(350L)
+
         activeFadeInActive = true
         lastCrossfadeIncomingMediaId = incomingItem.mediaId
         lastCrossfadeAdvanceAtMs = SystemClock.elapsedRealtime()
+        awaitingCrossfadeMediaTransition = true
+        awaitingCrossfadeDiscontinuity = true
+        runCatching { outgoing.volume = outgoingBaseGain }
         runCatching { mainPlayer.volume = 0f }
         isAdvancingViaCrossfade = true
         try {
@@ -806,21 +946,42 @@ class PlaybackService : MediaLibraryService() {
             isAdvancingViaCrossfade = false
         }
 
-        val fadeStartMs = SystemClock.elapsedRealtime()
         try {
-            while (!isServiceDestroyed && activeFadeInActive) {
-                val mainPlaying = runCatching {
-                    mainPlayer.isPlaying || mainPlayer.playWhenReady
+            // Let incoming track finish buffering cleanly while outgoing continues at full gain
+            var incomingBufferWaitMs = 0L
+            while (!isServiceDestroyed && activeFadeInActive && incomingBufferWaitMs < 450L) {
+                val mainOk = runCatching {
+                    mainPlayer.playWhenReady && mainPlayer.playbackState != Player.STATE_IDLE
                 }.getOrDefault(false)
-                if (!mainPlaying) break
+                if (!mainOk) break
+                if (runCatching { mainPlayer.isPlaying }.getOrDefault(false)) break
+                delay(15L)
+                incomingBufferWaitMs += 15L
+            }
+
+            val outRemainingAfterWaitMs = runCatching {
+                val outPos = outgoing.currentPosition.coerceAtLeast(0L)
+                ((outgoingDurationMs - outPos).coerceAtLeast(300L) / speed).toLong()
+            }.getOrDefault(actualFadeWallMs)
+            val loopFadeWallMs = minOf(actualFadeWallMs, outRemainingAfterWaitMs).coerceAtLeast(300L)
+            val fadeStartMs = SystemClock.elapsedRealtime()
+
+            while (!isServiceDestroyed && activeFadeInActive) {
+                val mainActive = runCatching {
+                    mainPlayer.currentMediaItem?.mediaId == incomingItem.mediaId &&
+                        mainPlayer.playWhenReady &&
+                        mainPlayer.playbackState != Player.STATE_IDLE &&
+                        mainPlayer.playbackState != Player.STATE_ENDED
+                }.getOrDefault(false)
+                if (!mainActive) break
 
                 val elapsed = (SystemClock.elapsedRealtime() - fadeStartMs).coerceAtLeast(0L)
-                val progress = (elapsed.toFloat() / fadeWallMs.toFloat()).coerceIn(0f, 1f)
+                val progress = (elapsed.toFloat() / loopFadeWallMs.toFloat()).coerceIn(0f, 1f)
                 val (outFactor, inFactor) = CrossfadeMath.equalPowerGains(progress)
 
                 runCatching { mainPlayer.volume = currentReplayGainMultiplier * inFactor }
-                val outEnded = runCatching { outgoing.playbackState == Player.STATE_ENDED }.getOrDefault(true)
-                if (!outEnded) {
+                val outState = runCatching { outgoing.playbackState }.getOrDefault(Player.STATE_ENDED)
+                if (outState != Player.STATE_ENDED && outState != Player.STATE_IDLE) {
                     runCatching { outgoing.volume = outgoingBaseGain * outFactor }
                 }
 
@@ -829,6 +990,8 @@ class PlaybackService : MediaLibraryService() {
             }
         } finally {
             activeFadeInActive = false
+            awaitingCrossfadeMediaTransition = false
+            awaitingCrossfadeDiscontinuity = false
             if (!isServiceDestroyed) {
                 runCatching { mainPlayer.volume = currentReplayGainMultiplier }
             }
@@ -844,40 +1007,120 @@ class PlaybackService : MediaLibraryService() {
         if (count == 0) return
 
         val rawIndex = player.currentMediaItemIndex.coerceIn(0, count - 1)
+        val posMs = player.currentPosition.coerceAtLeast(0L)
+        val shuffle = player.shuffleModeEnabled
+        val repeat = player.repeatMode
+
+        val canUseCachedTimeline = !cachedTimelineDirty &&
+            cachedTimelineCount == count &&
+            cachedWindowTrackIds.size == count &&
+            rawIndex in cachedWindowTrackIds.indices
+
+        if (canUseCachedTimeline && hasPersistedExactStructureInService) {
+            val currentMediaId = cachedWindowTrackIds[rawIndex]
+            if (currentMediaId.isNotBlank()) {
+                val writeBlock = {
+                    val updated = prefsStore.updateExactPosition(
+                        trackId = currentMediaId,
+                        queueIndex = rawIndex,
+                        positionMs = posMs,
+                        shuffleEnabled = shuffle,
+                        repeatMode = repeat
+                    )
+                    if (!updated) {
+                        prefsStore.updateExactFromService(
+                            trackId = currentMediaId,
+                            windowTrackIds = cachedWindowTrackIds,
+                            windowIndex = rawIndex,
+                            positionMs = posMs,
+                            shuffleEnabled = shuffle,
+                            repeatMode = repeat
+                        )
+                    }
+                }
+                if (synchronous) {
+                    writeBlock()
+                } else {
+                    persistSessionJob?.cancel()
+                    persistSessionJob = serviceScope.launch(Dispatchers.IO) { writeBlock() }
+                }
+                return
+            }
+        }
+
         val halfWindow = MAX_PERSISTED_ITEMS / 2
         val startIdx = if (count <= MAX_PERSISTED_ITEMS) 0 else (rawIndex - halfWindow).coerceIn(0, count - MAX_PERSISTED_ITEMS)
         val endIdxExclusive = (startIdx + MAX_PERSISTED_ITEMS).coerceAtMost(count)
 
-        val snapshots = (startIdx until endIdxExclusive).mapNotNull { idx ->
-            val item = runCatching { player.getMediaItemAt(idx) }.getOrNull() ?: return@mapNotNull null
-            val uri = item.localConfiguration?.uri?.toString() ?: return@mapNotNull null
+        val windowIds = ArrayList<String>(count)
+        val snapshots = ArrayList<SavedMediaItemSnapshot>(endIdxExclusive - startIdx)
+        for (idx in 0 until count) {
+            val item = runCatching { player.getMediaItemAt(idx) }.getOrNull() ?: continue
             val meta = item.mediaMetadata
-            SavedMediaItemSnapshot(
-                id = item.mediaId,
-                contentUri = uri,
-                title = meta.title?.toString() ?: "Pista",
-                artist = meta.artist?.toString() ?: "Artista desconocido",
-                album = meta.albumTitle?.toString() ?: "Álbum desconocido",
-                albumArtUri = meta.extras?.getString(PlaybackController.EXTRA_ALBUM_ART_URI)
-                    ?: meta.artworkUri?.toString(),
-                formatName = meta.extras?.getString(PlaybackController.EXTRA_FORMAT) ?: "MP3",
-                durationMs = meta.extras?.getLong(PlaybackController.EXTRA_DURATION_MS) ?: 0L
-            )
+            val trackId = meta.extras?.getString(PlaybackController.EXTRA_TRACK_ID) ?: item.mediaId
+            windowIds.add(trackId)
+            if (idx in startIdx until endIdxExclusive) {
+                val uri = item.localConfiguration?.uri?.toString() ?: continue
+                snapshots.add(
+                    SavedMediaItemSnapshot(
+                        id = item.mediaId,
+                        contentUri = uri,
+                        title = meta.title?.toString() ?: "Pista",
+                        artist = meta.artist?.toString() ?: "Artista desconocido",
+                        album = meta.albumTitle?.toString() ?: "Álbum desconocido",
+                        albumArtUri = meta.extras?.getString(PlaybackController.EXTRA_ALBUM_ART_URI)
+                            ?: meta.artworkUri?.toString(),
+                        formatName = meta.extras?.getString(PlaybackController.EXTRA_FORMAT) ?: "MP3",
+                        durationMs = meta.extras?.getLong(PlaybackController.EXTRA_DURATION_MS) ?: 0L
+                    )
+                )
+            }
         }
         if (snapshots.isEmpty()) return
+        cachedTimelineCount = count
+        cachedWindowTrackIds = windowIds
+        cachedTimelineSnapshots = snapshots
+        cachedSnapshotWindowStart = startIdx
+        cachedTimelineDirty = false
+        hasPersistedExactStructureInService = true
+
+        val currentMediaId = player.currentMediaItem?.let { item ->
+            item.mediaMetadata.extras?.getString(PlaybackController.EXTRA_TRACK_ID) ?: item.mediaId
+        }.orEmpty()
+
         val session = SavedPlaybackSession(
             items = snapshots,
             currentIndex = (rawIndex - startIdx).coerceIn(0, snapshots.lastIndex),
-            positionMs = player.currentPosition.coerceAtLeast(0L),
-            shuffleEnabled = player.shuffleModeEnabled,
-            repeatMode = player.repeatMode
+            positionMs = posMs,
+            shuffleEnabled = shuffle,
+            repeatMode = repeat
         )
         if (synchronous) {
             prefsStore.savePlaybackSession(session)
+            if (currentMediaId.isNotBlank()) {
+                prefsStore.updateExactFromService(
+                    trackId = currentMediaId,
+                    windowTrackIds = windowIds,
+                    windowIndex = rawIndex,
+                    positionMs = posMs,
+                    shuffleEnabled = shuffle,
+                    repeatMode = repeat
+                )
+            }
         } else {
             persistSessionJob?.cancel()
             persistSessionJob = serviceScope.launch(Dispatchers.IO) {
                 prefsStore.savePlaybackSession(session)
+                if (currentMediaId.isNotBlank()) {
+                    prefsStore.updateExactFromService(
+                        trackId = currentMediaId,
+                        windowTrackIds = windowIds,
+                        windowIndex = rawIndex,
+                        positionMs = posMs,
+                        shuffleEnabled = shuffle,
+                        repeatMode = repeat
+                    )
+                }
             }
         }
     }
@@ -892,6 +1135,9 @@ class PlaybackService : MediaLibraryService() {
             ?: meta?.artworkUri?.toString()
         val audioUri = item?.localConfiguration?.uri?.toString()
         val playing = player.isPlaying
+        val signature = "${item?.mediaId.orEmpty()}|$title|$artist|${artworkUri.orEmpty()}|$playing"
+        if (signature == lastWidgetSignature) return
+        lastWidgetSignature = signature
 
         serviceScope.launch(Dispatchers.IO) {
             runCatching {
@@ -1253,7 +1499,7 @@ class PlaybackService : MediaLibraryService() {
 
         private const val SEEK_INCREMENT_MS = 10_000L
         private const val TRACK_GAP_PAUSE_MS = 450L
-        private const val CROSSFADE_STEP_MS = 40L
+        private const val CROSSFADE_STEP_MS = 30L
         private const val MAX_PERSISTED_ITEMS = 120
         private const val WIDGET_IDLE_NOTIFICATION_ID = 9002
         private const val ROOT_ID = "sonora_root"

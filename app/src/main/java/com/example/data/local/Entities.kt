@@ -157,7 +157,8 @@ data class TrackLyricsEntity(
     @PrimaryKey val trackId: String,
     val rawLrcText: String,
     val sourceLabel: String = "Archivo .lrc guardado",
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val offsetMs: Long = 0L
 )
 
 @Entity(tableName = "track_lyrics_translations")

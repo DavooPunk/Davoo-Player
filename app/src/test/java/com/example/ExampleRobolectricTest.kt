@@ -21,6 +21,10 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -1760,10 +1764,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.0.5, v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.4").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.5").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.4").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.3").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.2").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.1").performScrollTo().assertIsDisplayed()
@@ -3443,7 +3448,9 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("lyrics_bottom_sheet").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("lyrics_adaptive_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_close_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("spotify_lyrics_list").assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag("lyrics_adaptive_card").assertCountEquals(0)
         composeTestRule.onNodeWithText("Dancing under neon glow").assertIsDisplayed()
         composeTestRule.onNodeWithText("Bailando bajo el brillo neón").assertIsDisplayed()
 
@@ -3938,15 +3945,694 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("Reproductor local · Vistas previas transmitidas desde API pública").assertIsDisplayed()
         composeTestRule.onNodeWithTag("legal_dmca_card").assertTextContains("Deezer API", substring = true)
 
-        // Verify v2.0.4 changelog covers features 1-3 cleanly (starting with Crossfade) without mentioning Legal tab changes
+        // Verify v2.0.5 (Actual) and v2.0.4 (Anterior) changelog entries omit Legal tab changes
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Crossfade real entre canciones", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Visor de letras inmersivo", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Crossfade real entre canciones", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Ir a la canción actual y cola reorganizada", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Eliminación física real de canciones del dispositivo", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Renombrado físico y escritura real de etiquetas", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onAllNodesWithText("Offline por defecto", substring = true).assertCountEquals(0)
         composeTestRule.onAllNodesWithText("pestaña Legal", substring = true).assertCountEquals(0)
         composeTestRule.onAllNodesWithText("Términos y Condiciones de Uso", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun `lyricsViewer v205 manual scroll pauses auto scroll shows Sincronizar pill and resumes on click`() {
+        val track = AudioTrack(
+            id = "lyr_scroll_205",
+            contentUri = "content://media/external/audio/media/2050",
+            title = "Free Scroll Song",
+            artist = "Davoo",
+            album = "v2.0.5",
+            albumId = 205L,
+            albumArtUri = null,
+            durationMs = 240_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 25_000_000L,
+            dateAddedSec = 250L,
+            folderName = "Music"
+        )
+        val manyLines = (0 until 30).map { idx ->
+            com.example.model.LyricLine(
+                timestampMs = idx * 4_000L,
+                text = "Line number $idx of the synchronized song"
+            )
+        }
+        val lyrics = com.example.model.LyricsData(
+            lines = manyLines,
+            isSynced = true,
+            sourceLabel = "Archivo .lrc local"
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 4_100L,
+                    onSeekTo = {},
+                    onPickLrcFile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("spotify_lyrics_list").assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag("lyrics_sync_resume_button").assertCountEquals(0)
+
+        // User manually swipes through lyrics -> pauses auto-scroll & shows "Sincronizar" pill
+        composeTestRule.onNodeWithTag("spotify_lyrics_list").performTouchInput {
+            swipeUp()
+        }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("lyrics_sync_resume_button").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Sincronizar").assertIsDisplayed()
+
+        // Tapping Sincronizar resumes auto-scroll immediately and hides the pill
+        composeTestRule.onNodeWithTag("lyrics_sync_resume_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onAllNodesWithTag("lyrics_sync_resume_button").assertCountEquals(0)
+    }
+
+    @Test
+    fun `lyricsViewer v205 offset controls adjust seek target and open lrc export dialog`() {
+        val track = AudioTrack(
+            id = "lyr_offset_205",
+            contentUri = "content://media/external/audio/media/2051",
+            title = "Timing Tune",
+            artist = "Davoo",
+            album = "Sync Lab",
+            albumId = 206L,
+            albumArtUri = null,
+            durationMs = 200_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 5_000_000L,
+            dateAddedSec = 251L,
+            folderName = "Music"
+        )
+        val lyricsState = androidx.compose.runtime.mutableStateOf(
+            com.example.model.LyricsData(
+                lines = listOf(
+                    com.example.model.LyricLine(0L, "Intro line"),
+                    com.example.model.LyricLine(12_000L, "Chorus Drop Line", "Línea del coro")
+                ),
+                isSynced = true,
+                sourceLabel = "Archivo .lrc guardado",
+                hasEmbeddedTranslation = true,
+                offsetMs = 0L
+            )
+        )
+        var lastSeekMs: Long? = null
+        var resetCalled = false
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyricsState.value,
+                    isLoading = false,
+                    positionMs = 1_000L,
+                    onSeekTo = { lastSeekMs = it },
+                    onPickLrcFile = {},
+                    onDismiss = {},
+                    onAdjustOffset = { delta ->
+                        lyricsState.value = lyricsState.value.copy(
+                            offsetMs = lyricsState.value.offsetMs + delta
+                        )
+                    },
+                    onResetOffset = {
+                        resetCalled = true
+                        lyricsState.value = lyricsState.value.copy(offsetMs = 0L)
+                    },
+                    onExportSaveLrc = {},
+                    onExportShareLrc = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        // Open manage menu -> test +0.5s, +0.5s, +0.5s (= +1.5s) then click Chorus Drop Line (12s -> seeks to 10.5s)
+        composeTestRule.onNodeWithTag("lyrics_manage_menu_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("lyrics_offset_plus_button").assertIsDisplayed().performClick()
+        composeTestRule.onNodeWithTag("lyrics_offset_plus_button").performClick()
+        composeTestRule.onNodeWithTag("lyrics_offset_plus_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1_500L, lyricsState.value.offsetMs)
+
+        composeTestRule.onNodeWithTag("lyrics_offset_minus_button").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(1_000L, lyricsState.value.offsetMs)
+
+        // Open export .lrc dialog from manage menu
+        composeTestRule.onNodeWithTag("menu_export_lrc_button").assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("lyrics_export_dialog").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Cancelar").performClick()
+        composeTestRule.waitForIdle()
+
+        // Tapping lyric line at 12,000ms with +1,000ms offset seeks to 11,000ms
+        composeTestRule.onNodeWithText("Chorus Drop Line").performClick()
+        composeTestRule.waitForIdle()
+        assertEquals(11_000L, lastSeekMs)
+
+        // Reset offset via 0.0s button
+        composeTestRule.onNodeWithTag("lyrics_manage_menu_button").performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("lyrics_offset_reset_button").performClick()
+        composeTestRule.waitForIdle()
+        assertTrue(resetCalled)
+        assertEquals(0L, lyricsState.value.offsetMs)
+    }
+
+    @Test
+    fun `lyricsRepository saveLyricsOffset persists across reload and exportLyricsToLrc shifts timestamps`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = com.example.data.repository.MusicRepository(
+            context = context,
+            scanner = com.example.data.repository.DeviceMusicScanner(context),
+            playlistDao = db.playlistDao(),
+            importedTrackDao = db.importedTrackDao(),
+            trackStatsDao = db.trackStatsDao(),
+            trackTagOverrideDao = db.trackTagOverrideDao(),
+            excludedFolderDao = db.excludedFolderDao(),
+            trackLyricsDao = db.trackLyricsDao(),
+            trackLyricsTranslationDao = db.trackLyricsTranslationDao()
+        )
+        val track = AudioTrack(
+            id = "repo_offset_track_1",
+            contentUri = "content://media/external/audio/media/9991",
+            title = "Starlight",
+            artist = "Davoo",
+            album = "Orbit",
+            albumId = 50L,
+            albumArtUri = null,
+            durationMs = 210_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 20_000_000L,
+            dateAddedSec = 100L,
+            folderName = "Music"
+        )
+        val initialEmbeddedLyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(5_000L, "First verse", "Primer verso"),
+                com.example.model.LyricLine(15_500L, "Second verse", "Segundo verso")
+            ),
+            isSynced = true,
+            sourceLabel = "Etiqueta incrustada",
+            hasEmbeddedTranslation = true,
+            offsetMs = 0L
+        )
+
+        val updated = repo.saveLyricsOffset(track, initialEmbeddedLyrics, 1_500L)
+        assertEquals(1_500L, updated.offsetMs)
+
+        val reloaded = repo.loadLyrics(track)
+        assertNotNull(reloaded)
+        assertEquals(1_500L, reloaded?.offsetMs)
+
+        val exportedBilingual = com.example.data.repository.AudioTagParsers.exportLyricsToLrc(
+            trackTitle = track.title,
+            trackArtist = track.artist,
+            trackAlbum = track.album,
+            lyrics = reloaded!!,
+            translatedLyrics = null,
+            includeTranslation = true
+        )
+        assertTrue(exportedBilingual.contains("[ti:Starlight]"))
+        assertTrue(exportedBilingual.contains("[00:03.50]First verse"))
+        assertTrue(exportedBilingual.contains("[00:03.50]Primer verso"))
+        assertTrue(exportedBilingual.contains("[00:14.00]Second verse"))
+        assertTrue(exportedBilingual.contains("[00:14.00]Segundo verso"))
+
+        val exportedOriginalOnly = com.example.data.repository.AudioTagParsers.exportLyricsToLrc(
+            trackTitle = track.title,
+            trackArtist = track.artist,
+            trackAlbum = track.album,
+            lyrics = reloaded,
+            translatedLyrics = null,
+            includeTranslation = false
+        )
+        assertTrue(exportedOriginalOnly.contains("[00:03.50]First verse"))
+        assertFalse(exportedOriginalOnly.contains("Primer verso"))
+    }
+
+    @Test
+    fun `playbackPreferencesStore exact session roundtrip and PlaybackSessionRestorePlanner restores paused queue`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        val tracks = listOf("t_a", "t_b", "t_c").mapIndexed { idx, id ->
+            AudioTrack(
+                id = id,
+                contentUri = "content://media/external/audio/media/${idx + 10}",
+                title = "Track $id",
+                artist = "Artist",
+                album = "Album",
+                albumId = idx.toLong(),
+                albumArtUri = null,
+                durationMs = 180_000L,
+                format = AudioFormat.MP3,
+                mimeType = "audio/mpeg",
+                sizeBytes = 4_000_000L,
+                dateAddedSec = 100L + idx,
+                folderName = "Music"
+            )
+        }
+
+        val session = com.example.data.local.ExactPlaybackSession(
+            lastTrackId = "t_b",
+            lastQueueTrackIds = listOf("t_a", "t_missing", "t_b", "t_c"),
+            lastQueueIndex = 2,
+            lastPositionMs = 47_500L,
+            shuffleEnabled = true,
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_ALL
+        )
+        prefs.saveExactPlaybackSession(session)
+
+        val loaded = prefs.loadExactPlaybackSession()
+        assertEquals(session, loaded)
+
+        val plan = com.example.data.local.PlaybackSessionRestorePlanner.buildPlan(loaded!!, tracks)
+        assertNotNull(plan)
+        assertEquals(listOf("t_a", "t_b", "t_c"), plan!!.tracks.map { it.id })
+        assertEquals(1, plan.startIndex)
+        assertEquals(47_500L, plan.positionMs)
+        assertTrue(plan.shuffleEnabled)
+        assertEquals(androidx.media3.common.Player.REPEAT_MODE_ALL, plan.repeatMode)
+    }
+
+    @Test
+    fun `miniPlayerBar horizontal swipes trigger skipNext and skipPrevious and nowPlaying opens artist and album`() {
+        val track = AudioTrack(
+            id = "np_link_1",
+            contentUri = "content://media/external/audio/media/880",
+            title = "Midnight Echo",
+            artist = "Davoo Band",
+            album = "Nocturne Album",
+            albumId = 88L,
+            albumArtUri = null,
+            durationMs = 215_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 22_000_000L,
+            dateAddedSec = 500L,
+            folderName = "Music"
+        )
+        val playbackState = com.example.playback.PlaybackUiState(
+            currentTrack = track,
+            queue = listOf(track),
+            currentIndex = 0,
+            isPlaying = false,
+            positionMs = 30_000L,
+            durationMs = 215_000L
+        )
+        var skippedNext = 0
+        var skippedPrev = 0
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.MiniPlayerBar(
+                    playbackState = playbackState,
+                    onOpenNowPlaying = {},
+                    onTogglePlayPause = {},
+                    onSkipNext = { skippedNext++ },
+                    onSkipPrevious = { skippedPrev++ }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("mini_player_bar").performTouchInput {
+            swipeLeft()
+        }
+        composeTestRule.waitForIdle()
+        assertEquals(1, skippedNext)
+
+        composeTestRule.onNodeWithTag("mini_player_bar").performTouchInput {
+            swipeRight()
+        }
+        composeTestRule.waitForIdle()
+        assertEquals(1, skippedPrev)
+    }
+
+    @Test
+    fun `nowPlayingScreen artist and album links navigate directly to Artist and Album`() {
+        val track = AudioTrack(
+            id = "np_nav_205",
+            contentUri = "content://media/external/audio/media/881",
+            title = "Solar Flare",
+            artist = "Celestial Project",
+            album = "Horizon LP",
+            albumId = 89L,
+            albumArtUri = null,
+            durationMs = 195_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 19_000_000L,
+            dateAddedSec = 510L,
+            folderName = "Music"
+        )
+        val playbackState = com.example.playback.PlaybackUiState(
+            currentTrack = track,
+            queue = listOf(track),
+            currentIndex = 0,
+            isPlaying = true,
+            positionMs = 20_000L,
+            durationMs = 195_000L
+        )
+        var openedArtist: String? = null
+        var openedAlbum: String? = null
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.NowPlayingScreen(
+                    playbackState = playbackState,
+                    onCollapse = {},
+                    onTogglePlayPause = {},
+                    onSeekTo = {},
+                    onSeekBackward = {},
+                    onSeekForward = {},
+                    onSkipPrevious = {},
+                    onSkipNext = {},
+                    onToggleShuffle = {},
+                    onCycleRepeat = {},
+                    onOpenQueue = {},
+                    onAddToPlaylist = {},
+                    onOpenAlbum = { openedAlbum = it },
+                    onOpenArtist = { openedArtist = it }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("now_playing_artist_link").performScrollTo().assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("Celestial Project", openedArtist)
+
+        composeTestRule.onNodeWithTag("now_playing_album_link").performScrollTo().assertIsDisplayed().performClick()
+        composeTestRule.waitForIdle()
+        assertEquals("Horizon LP", openedAlbum)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w390dp-h780dp")
+    fun `nowPlayingScreen omits 10s skip buttons and fits playback interface without scrolling on phone viewport`() {
+        val track = AudioTrack(
+            id = "np_compact_205",
+            contentUri = "content://media/external/audio/media/882",
+            title = "Compact Fit Track",
+            artist = "Davoo",
+            album = "Balanced UI",
+            albumId = 90L,
+            albumArtUri = null,
+            durationMs = 205_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 18_000_000L,
+            dateAddedSec = 520L,
+            folderName = "Music"
+        )
+        val playbackState = com.example.playback.PlaybackUiState(
+            currentTrack = track,
+            queue = listOf(track),
+            currentIndex = 0,
+            isPlaying = true,
+            positionMs = 45_000L,
+            durationMs = 205_000L
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.NowPlayingScreen(
+                    playbackState = playbackState,
+                    onCollapse = {},
+                    onTogglePlayPause = {},
+                    onSeekTo = {},
+                    onSkipPrevious = {},
+                    onSkipNext = {},
+                    onToggleShuffle = {},
+                    onCycleRepeat = {},
+                    onOpenQueue = {},
+                    onAddToPlaylist = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onAllNodesWithTag("now_playing_seek_back_button").assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag("now_playing_seek_forward_button").assertCountEquals(0)
+        composeTestRule.onNodeWithTag("now_playing_artwork").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("now_playing_play_pause_button").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("now_playing_lyrics_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun `playbackPreferencesStore updateExactPosition updates fast path and preserves cached queue safely`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+        val queueIds = listOf("trk_1", "trk_2", "trk_3", "trk_4")
+        val initialExact = com.example.data.local.ExactPlaybackSession(
+            lastTrackId = "trk_1",
+            lastQueueTrackIds = queueIds,
+            lastQueueIndex = 0,
+            lastPositionMs = 5_000L,
+            shuffleEnabled = false,
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
+        )
+        prefs.saveExactPlaybackSession(initialExact)
+        prefs.savePlaybackSession(
+            com.example.data.local.SavedPlaybackSession(
+                items = queueIds.mapIndexed { idx, id ->
+                    com.example.data.local.SavedMediaItemSnapshot(
+                        id = id,
+                        contentUri = "content://media/external/audio/media/${idx + 1}",
+                        title = "Song $id",
+                        artist = "Artist",
+                        album = "Album",
+                        formatName = AudioFormat.FLAC.name,
+                        durationMs = 180_000L
+                    )
+                },
+                currentIndex = 0,
+                positionMs = 5_000L,
+                shuffleEnabled = false,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
+            )
+        )
+
+        val updated = prefs.updateExactPosition(
+            trackId = "trk_3",
+            queueIndex = 2,
+            positionMs = 91_250L,
+            shuffleEnabled = true,
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+        )
+        assertTrue(updated)
+
+        val loadedExact = prefs.loadExactPlaybackSession()
+        assertNotNull(loadedExact)
+        assertEquals("trk_3", loadedExact!!.lastTrackId)
+        assertEquals(queueIds, loadedExact.lastQueueTrackIds)
+        assertEquals(2, loadedExact.lastQueueIndex)
+        assertEquals(91_250L, loadedExact.lastPositionMs)
+        assertTrue(loadedExact.shuffleEnabled)
+        assertEquals(androidx.media3.common.Player.REPEAT_MODE_ONE, loadedExact.repeatMode)
+
+        val loadedSaved = prefs.loadPlaybackSession()
+        assertNotNull(loadedSaved)
+        assertEquals(2, loadedSaved!!.currentIndex)
+        assertEquals(91_250L, loadedSaved.positionMs)
+        assertTrue(loadedSaved.shuffleEnabled)
+        assertEquals(androidx.media3.common.Player.REPEAT_MODE_ONE, loadedSaved.repeatMode)
+
+        // Track not in cached queue -> returns false so caller can perform full queue snapshot
+        assertFalse(
+            prefs.updateExactPosition(
+                trackId = "trk_unknown",
+                queueIndex = 0,
+                positionMs = 1_000L,
+                shuffleEnabled = false,
+                repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
+            )
+        )
+    }
+
+    @Test
+    fun `nowPlayingScreen and lyricsBottomSheet react smoothly to decoupled livePositionFlow`() {
+        val track = AudioTrack(
+            id = "live_pos_1",
+            contentUri = "content://media/external/audio/media/950",
+            title = "Smooth Ticker Track",
+            artist = "Davoo",
+            album = "Zero Jank",
+            albumId = 95L,
+            albumArtUri = null,
+            durationMs = 200_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 20_000_000L,
+            dateAddedSec = 600L,
+            folderName = "Music"
+        )
+        val liveFlow = kotlinx.coroutines.flow.MutableStateFlow(
+            com.example.playback.PlaybackPositionState(
+                positionMs = 15_000L,
+                durationMs = 200_000L
+            )
+        )
+        val state = com.example.playback.PlaybackUiState(
+            currentTrack = track,
+            queue = listOf(track),
+            currentIndex = 0,
+            isPlaying = true,
+            positionMs = 0L,
+            durationMs = 200_000L
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.NowPlayingScreen(
+                    playbackState = state,
+                    livePositionFlow = liveFlow,
+                    onCollapse = {},
+                    onTogglePlayPause = {},
+                    onSeekTo = {},
+                    onSkipPrevious = {},
+                    onSkipNext = {},
+                    onToggleShuffle = {},
+                    onCycleRepeat = {},
+                    onOpenQueue = {},
+                    onAddToPlaylist = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("0:15", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+
+        liveFlow.value = com.example.playback.PlaybackPositionState(
+            positionMs = 65_000L,
+            durationMs = 200_000L
+        )
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("1:05", useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun `lyricsBottomSheet updates timer and active line cleanly from livePositionFlow`() {
+        val track = AudioTrack(
+            id = "live_lyr_1",
+            contentUri = "content://media/external/audio/media/951",
+            title = "Synced Flow Song",
+            artist = "Davoo",
+            album = "Performance",
+            albumId = 96L,
+            albumArtUri = null,
+            durationMs = 120_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 15_000_000L,
+            dateAddedSec = 610L,
+            folderName = "Music"
+        )
+        val lyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(1_000L, "Opening smooth line"),
+                com.example.model.LyricLine(15_000L, "Target jumped line")
+            ),
+            isSynced = true,
+            sourceLabel = "Archivo .lrc local"
+        )
+        val liveFlow = kotlinx.coroutines.flow.MutableStateFlow(
+            com.example.playback.PlaybackPositionState(
+                positionMs = 2_000L,
+                durationMs = 120_000L
+            )
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 0L,
+                    livePositionFlow = liveFlow,
+                    onSeekTo = {},
+                    onPickLrcFile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("0:02", useUnmergedTree = true).assertIsDisplayed()
+
+        liveFlow.value = com.example.playback.PlaybackPositionState(
+            positionMs = 16_000L,
+            durationMs = 120_000L
+        )
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("0:16", useUnmergedTree = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Target jumped line").assertIsDisplayed()
+    }
+
+    @Test
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun `playbackService does not abort crossfade during buffering transition but aborts on pause or idle`() {
+        val controller = org.robolectric.Robolectric.buildService(com.example.playback.PlaybackService::class.java)
+        val service = controller.create().get()
+        try {
+            val player = service.activePlayerOrNull()!!
+            val item1 = MediaItem.Builder()
+                .setMediaId("xfade_track_1")
+                .setUri(Uri.parse("file:///android_asset/track1.mp3"))
+                .build()
+            val item2 = MediaItem.Builder()
+                .setMediaId("xfade_track_2")
+                .setUri(Uri.parse("file:///android_asset/track2.mp3"))
+                .build()
+
+            player.setMediaItems(listOf(item1, item2))
+            player.playWhenReady = false
+            Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+
+            // Idle / paused -> must abort crossfade if active
+            assertTrue(service.shouldAbortCrossfadeOnIsPlayingChanged(player))
+
+            // Buffering while playWhenReady = true (e.g. immediately after seekToNextMediaItem) -> must NOT abort crossfade!
+            player.playWhenReady = true
+            player.prepare()
+            assertEquals(androidx.media3.common.Player.STATE_BUFFERING, player.playbackState)
+            assertFalse(service.shouldAbortCrossfadeOnIsPlayingChanged(player))
+
+            // User pauses during transition -> must abort
+            player.playWhenReady = false
+            assertTrue(service.shouldAbortCrossfadeOnIsPlayingChanged(player))
+        } finally {
+            controller.destroy()
+        }
     }
 }

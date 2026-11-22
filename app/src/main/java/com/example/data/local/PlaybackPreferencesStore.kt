@@ -9,6 +9,7 @@ import com.example.BuildConfig
 import com.example.ai.DeepLLyricsTranslator
 import com.example.ai.TranslationEngine
 import com.example.model.AudioSettings
+import com.example.model.AudioTrack
 import com.example.model.EqPreset
 import com.example.model.HeadphoneEqProfile
 import com.example.model.LastFmSession
@@ -16,6 +17,7 @@ import com.example.model.SdCardFolder
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.math.abs
 
 @Serializable
 data class SavedMediaItemSnapshot(
@@ -37,6 +39,63 @@ data class SavedPlaybackSession(
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF
 )
+
+@Serializable
+data class ExactPlaybackSession(
+    val lastTrackId: String,
+    val lastQueueTrackIds: List<String> = emptyList(),
+    val lastQueueIndex: Int = 0,
+    val lastPositionMs: Long = 0L,
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: Int = Player.REPEAT_MODE_OFF
+)
+
+data class RestoredQueuePlan(
+    val tracks: List<AudioTrack>,
+    val startIndex: Int,
+    val positionMs: Long,
+    val shuffleEnabled: Boolean,
+    val repeatMode: Int
+)
+
+object PlaybackSessionRestorePlanner {
+    fun buildPlan(
+        saved: ExactPlaybackSession,
+        libraryTracks: List<AudioTrack>
+    ): RestoredQueuePlan? {
+        if (libraryTracks.isEmpty() || saved.lastTrackId.isBlank()) return null
+        val trackById = libraryTracks.associateBy { it.id }
+        val reconstructed = if (saved.lastQueueTrackIds.isNotEmpty()) {
+            saved.lastQueueTrackIds.mapNotNull { trackById[it] }
+        } else {
+            emptyList()
+        }
+        val queue = if (reconstructed.isNotEmpty()) {
+            reconstructed
+        } else {
+            val single = trackById[saved.lastTrackId] ?: return null
+            listOf(single)
+        }
+        val matchingIndices = queue.indices.filter { queue[it].id == saved.lastTrackId }
+        val resolvedIndex = if (matchingIndices.isNotEmpty()) {
+            matchingIndices.minByOrNull { abs(it - saved.lastQueueIndex) } ?: matchingIndices.first()
+        } else {
+            saved.lastQueueIndex.coerceIn(0, queue.lastIndex)
+        }
+        val resolvedPosMs = if (queue[resolvedIndex].id == saved.lastTrackId) {
+            saved.lastPositionMs.coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        return RestoredQueuePlan(
+            tracks = queue,
+            startIndex = resolvedIndex,
+            positionMs = resolvedPosMs,
+            shuffleEnabled = saved.shuffleEnabled,
+            repeatMode = saved.repeatMode
+        )
+    }
+}
 
 @Serializable
 private data class AudioSettingsDto(
@@ -165,18 +224,205 @@ class PlaybackPreferencesStore(context: Context) {
         }
     }
 
+    private val sessionCacheLock = Any()
+    @Volatile
+    private var cachedSavedSession: SavedPlaybackSession? = null
+    @Volatile
+    private var cachedExactSession: ExactPlaybackSession? = null
+
     fun savePlaybackSession(session: SavedPlaybackSession) {
         if (session.items.isEmpty()) return
-        runCatching {
-            prefs.edit().putString(KEY_SAVED_SESSION, json.encodeToString(session)).apply()
+        synchronized(sessionCacheLock) {
+            cachedSavedSession = session
+            runCatching {
+                prefs.edit().putString(KEY_SAVED_SESSION, json.encodeToString(session)).apply()
+            }
         }
     }
 
     fun loadPlaybackSession(): SavedPlaybackSession? {
+        cachedSavedSession?.let { return it }
+        return synchronized(sessionCacheLock) {
+            cachedSavedSession?.let { return@synchronized it }
+            val raw = prefs.getString(KEY_SAVED_SESSION, null) ?: return@synchronized null
+            runCatching {
+                json.decodeFromString<SavedPlaybackSession>(raw)
+            }.getOrNull()?.takeIf { it.items.isNotEmpty() }?.also {
+                cachedSavedSession = it
+            }
+        }
+    }
+
+    fun saveExactPlaybackSession(session: ExactPlaybackSession) {
+        if (session.lastTrackId.isBlank()) return
+        synchronized(sessionCacheLock) {
+            val capped = capExactSessionQueue(session)
+            cachedExactSession = capped
+            runCatching {
+                prefs.edit().putString(KEY_EXACT_SESSION, json.encodeToString(capped)).apply()
+            }
+        }
+    }
+
+    fun loadExactPlaybackSession(): ExactPlaybackSession? {
+        cachedExactSession?.let { return it }
+        return synchronized(sessionCacheLock) {
+            cachedExactSession?.let { return@synchronized it }
+            val raw = prefs.getString(KEY_EXACT_SESSION, null) ?: return@synchronized null
+            runCatching {
+                json.decodeFromString<ExactPlaybackSession>(raw)
+            }.getOrNull()?.takeIf { it.lastTrackId.isNotBlank() }?.also {
+                cachedExactSession = it
+            }
+        }
+    }
+
+    /**
+     * Fast path for periodic position ticks, pauses, and seeks when the queue structure has not
+     * changed: updates cached exact & fallback session metadata in memory and avoids rebuilding
+     * full MediaItem snapshots or re-decoding Preferences JSON.
+     */
+    fun updateExactPosition(
+        trackId: String,
+        queueIndex: Int,
+        positionMs: Long,
+        shuffleEnabled: Boolean,
+        repeatMode: Int
+    ): Boolean {
+        if (trackId.isBlank()) return false
+        val safePos = positionMs.coerceAtLeast(0L)
+        return synchronized(sessionCacheLock) {
+            val existing = loadExactPlaybackSessionUnlocked() ?: return@synchronized false
+            if (existing.lastQueueTrackIds.isEmpty()) return@synchronized false
+            val clampedIdx = queueIndex.coerceIn(0, existing.lastQueueTrackIds.lastIndex)
+            if (existing.lastQueueTrackIds[clampedIdx] != trackId && trackId !in existing.lastQueueTrackIds) {
+                return@synchronized false
+            }
+            val resolvedIdx = if (existing.lastQueueTrackIds[clampedIdx] == trackId) {
+                clampedIdx
+            } else {
+                val matching = existing.lastQueueTrackIds.indices.filter { existing.lastQueueTrackIds[it] == trackId }
+                matching.minByOrNull { abs(it - existing.lastQueueIndex) } ?: return@synchronized false
+            }
+
+            val updatedExact = existing.copy(
+                lastTrackId = trackId,
+                lastQueueIndex = resolvedIdx,
+                lastPositionMs = safePos,
+                shuffleEnabled = shuffleEnabled,
+                repeatMode = repeatMode
+            )
+            cachedExactSession = updatedExact
+
+            val existingSaved = loadPlaybackSessionUnlocked()
+            val updatedSaved = existingSaved?.let { saved ->
+                val savedIdx = saved.items.indexOfFirst { it.id == trackId }
+                if (savedIdx >= 0) {
+                    saved.copy(
+                        currentIndex = savedIdx,
+                        positionMs = safePos,
+                        shuffleEnabled = shuffleEnabled,
+                        repeatMode = repeatMode
+                    )
+                } else null
+            }
+            if (updatedSaved != null) {
+                cachedSavedSession = updatedSaved
+            }
+
+            runCatching {
+                val editor = prefs.edit().putString(KEY_EXACT_SESSION, json.encodeToString(updatedExact))
+                if (updatedSaved != null) {
+                    editor.putString(KEY_SAVED_SESSION, json.encodeToString(updatedSaved))
+                }
+                editor.apply()
+            }
+            true
+        }
+    }
+
+    private fun loadPlaybackSessionUnlocked(): SavedPlaybackSession? {
+        cachedSavedSession?.let { return it }
         val raw = prefs.getString(KEY_SAVED_SESSION, null) ?: return null
         return runCatching {
             json.decodeFromString<SavedPlaybackSession>(raw)
-        }.getOrNull()?.takeIf { it.items.isNotEmpty() }
+        }.getOrNull()?.takeIf { it.items.isNotEmpty() }?.also {
+            cachedSavedSession = it
+        }
+    }
+
+    private fun loadExactPlaybackSessionUnlocked(): ExactPlaybackSession? {
+        cachedExactSession?.let { return it }
+        val raw = prefs.getString(KEY_EXACT_SESSION, null) ?: return null
+        return runCatching {
+            json.decodeFromString<ExactPlaybackSession>(raw)
+        }.getOrNull()?.takeIf { it.lastTrackId.isNotBlank() }?.also {
+            cachedExactSession = it
+        }
+    }
+
+    fun updateExactFromService(
+        trackId: String,
+        windowTrackIds: List<String>,
+        windowIndex: Int,
+        positionMs: Long,
+        shuffleEnabled: Boolean,
+        repeatMode: Int
+    ) {
+        if (trackId.isBlank()) return
+        synchronized(sessionCacheLock) {
+            val existing = loadExactPlaybackSessionUnlocked()
+            val nextSession = if (existing != null &&
+                existing.lastQueueTrackIds.size >= windowTrackIds.size &&
+                trackId in existing.lastQueueTrackIds
+            ) {
+                val matching = existing.lastQueueTrackIds.indices.filter { existing.lastQueueTrackIds[it] == trackId }
+                val bestIdx = matching.minByOrNull { abs(it - existing.lastQueueIndex) } ?: matching.first()
+                existing.copy(
+                    lastTrackId = trackId,
+                    lastQueueIndex = bestIdx,
+                    lastPositionMs = positionMs.coerceAtLeast(0L),
+                    shuffleEnabled = shuffleEnabled,
+                    repeatMode = repeatMode
+                )
+            } else {
+                val safeIds = if (windowTrackIds.isNotEmpty()) windowTrackIds else listOf(trackId)
+                val safeIdx = windowIndex.coerceIn(0, safeIds.lastIndex)
+                ExactPlaybackSession(
+                    lastTrackId = trackId,
+                    lastQueueTrackIds = safeIds,
+                    lastQueueIndex = safeIdx,
+                    lastPositionMs = positionMs.coerceAtLeast(0L),
+                    shuffleEnabled = shuffleEnabled,
+                    repeatMode = repeatMode
+                )
+            }
+            val capped = capExactSessionQueue(nextSession)
+            cachedExactSession = capped
+            runCatching {
+                prefs.edit().putString(KEY_EXACT_SESSION, json.encodeToString(capped)).apply()
+            }
+        }
+    }
+
+    private fun capExactSessionQueue(session: ExactPlaybackSession): ExactPlaybackSession {
+        val ids = session.lastQueueTrackIds
+        if (ids.size <= MAX_EXACT_QUEUE_IDS) {
+            val safeIdx = if (ids.isEmpty()) 0 else session.lastQueueIndex.coerceIn(0, ids.lastIndex)
+            return session.copy(
+                lastQueueIndex = safeIdx,
+                lastPositionMs = session.lastPositionMs.coerceAtLeast(0L)
+            )
+        }
+        val clampedIdx = session.lastQueueIndex.coerceIn(0, ids.lastIndex)
+        val half = MAX_EXACT_QUEUE_IDS / 2
+        val start = (clampedIdx - half).coerceIn(0, ids.size - MAX_EXACT_QUEUE_IDS)
+        val end = (start + MAX_EXACT_QUEUE_IDS).coerceAtMost(ids.size)
+        return session.copy(
+            lastQueueTrackIds = ids.subList(start, end),
+            lastQueueIndex = (clampedIdx - start).coerceIn(0, (end - start - 1).coerceAtLeast(0)),
+            lastPositionMs = session.lastPositionMs.coerceAtLeast(0L)
+        )
     }
 
     fun savedItemToMediaItem(snap: SavedMediaItemSnapshot): MediaItem {
@@ -347,6 +593,8 @@ class PlaybackPreferencesStore(context: Context) {
         private const val KEY_AUDIO_SETTINGS = "audio_settings_json"
         private const val KEY_CUSTOM_EQ_PROFILES = "custom_eq_profiles_json"
         private const val KEY_SAVED_SESSION = "saved_playback_session_json"
+        private const val KEY_EXACT_SESSION = "exact_playback_session_json"
+        private const val MAX_EXACT_QUEUE_IDS = 2500
         private const val KEY_SD_TREE_FOLDERS = "sd_tree_folders_json"
         private const val KEY_TRANSLATION_ENGINE = "preferred_translation_engine"
         private const val KEY_AUTO_UPDATE_CHECK = "auto_update_check_enabled"

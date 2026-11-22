@@ -23,6 +23,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import android.util.LruCache
 import java.io.File
@@ -717,6 +719,7 @@ class DeviceMusicScanner(private val context: Context) {
         private const val MAX_SD_TREE_DEPTH = 16
         private const val MAX_SD_TREE_TRACKS = 5000
         private val durationCache = LruCache<String, Long>(256)
+        private val durationExtractorSemaphore = kotlinx.coroutines.sync.Semaphore(permits = 2)
         private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
         fun evictDurationsAsync(uris: Collection<String>) {
@@ -732,9 +735,13 @@ class DeviceMusicScanner(private val context: Context) {
             if (key.isBlank()) return null
             durationCache.get(key)?.let { return it }
             return withContext(Dispatchers.IO) {
-                extractDurationWithRetriever(context, uri)?.also { duration ->
-                    if (duration > 0L) {
-                        durationCache.put(key, duration)
+                durationCache.get(key)?.let { return@withContext it }
+                durationExtractorSemaphore.withPermit {
+                    durationCache.get(key)?.let { return@withPermit it }
+                    extractDurationWithRetriever(context, uri)?.also { duration ->
+                        if (duration > 0L) {
+                            durationCache.put(key, duration)
+                        }
                     }
                 }
             }
