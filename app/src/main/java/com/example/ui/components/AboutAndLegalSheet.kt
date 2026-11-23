@@ -13,10 +13,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -25,7 +27,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Copyright
@@ -36,23 +37,22 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,9 +66,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.BuildConfig
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 
 private enum class AboutSheetSection(val label: String, val tag: String) {
     ABOUT("Acerca", "about_tab_about"),
@@ -139,8 +139,23 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.5",
+        version = "v2.0.6",
         tag = "Actual",
+        items = listOf(
+            "Compartir letras y fragmentos en Video 9:16 (.mp4) e Imagen (.png): exporta clips verticales listos para Estados de WhatsApp e Historias directamente desde el icono de compartir en la esquina superior derecha del visor inmersivo de letras.",
+            "Selección inteligente de versos y tiempos: toca de 1 a 6 líneas consecutivas en letras .lrc (con offset calibrado, tope de 30s y modo Original o Bilingüe) o ajusta un fragmento de 15s a 30s con visualizador animado en pistas sin letra sincronizada.",
+            "Vista previa en bucle y 3 estilos visuales: previsualiza en tiempo real con reproducción en bucle (pausando/restaurando la música principal) y elige entre Color dinámico, Oscuro ámbar o Carátula difuminada.",
+            "Motor nativo compatible con FLAC Hi-Res: usa MediaCodec/MediaExtractor/MediaMuxer (H.264 720x1280 30fps + AAC 192 kbps) con conversión automática de 24/32-bit/float y 88.2/96 kHz, fade-in/fade-out suave, progreso real cancelable y limpieza de caché shared_clips.",
+            "Indicador musical en interludios instrumentales: las introducciones largas, pausas instrumentales (> 8s) o líneas vacías/con puntos en archivos .lrc muestran un icono animado de nota musical (♪) interactivo para saltar al instante.",
+            "Acerca de, Legal y Cambios a pantalla completa y actualizaciones por defecto: vista inmersiva sin cierres accidentales al deslizar y avisos automáticos de nuevas versiones activados de fábrica (desactivables en Opciones).",
+            "Tema Oscuro, Claro y Automático + Personalización total de colores: elige entre Oscuro (por defecto), Claro o Automático del sistema con adaptación dinámica de barras del sistema, 6 paletas predefinidas y selector manual interactivo (RGB/Hex) con verificación de contraste WCAG para primario, secundario, fondo, superficie y texto.",
+            "Copia de seguridad completa (.json): exporta e importa desde Opciones toda tu configuración de apariencia, colores personalizados, preferencias de audio y listas de reproducción en un archivo .json.",
+            "Opciones organizadas y optimización general: controles de reproducción de audio (Crossfade, Normalizar volumen y Gapless) centralizados en Ecualizador y DSP, ajuste de colores dinámicos unificado en Apariencia y mayor fluidez en toda la interfaz."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.5",
+        tag = "Anterior",
         items = listOf(
             "Visor de letras inmersivo a pantalla completa (estilo Spotify): elimina cierres accidentales al deslizar, añade cabecera limpia con flecha para cerrar y título/artista centrados sobre el fondo degradado dinámico sin cajas contenedoras.",
             "Navegación libre en letras: al tocar o deslizar la letra se pausa el auto-scroll por 4.5 segundos manteniendo el resaltado de la línea actual y mostrando el botón flotante «Sincronizar» para volver al instante.",
@@ -244,13 +259,11 @@ private val changelogReleases = listOf(
     )
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreditsBottomSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val contentScrollState = rememberScrollState()
     var selectedSection by remember { mutableStateOf(AboutSheetSection.ABOUT) }
     var supportFeedback by remember { mutableStateOf<String?>(null) }
@@ -259,35 +272,54 @@ fun CreditsBottomSheet(
         contentScrollState.scrollTo(0)
     }
 
-    ModalBottomSheet(
+    Dialog(
         onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp)
-                .testTag("credits_bottom_sheet"),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp)
+                    .padding(top = 8.dp, bottom = 12.dp)
+                    .testTag("credits_bottom_sheet"),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.weight(1f)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("close_credits_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Cerrar créditos y legal",
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                     Icon(
                         imageVector = Icons.Rounded.Album,
                         contentDescription = null,
-                        tint = CopperAmber
+                        tint = MaterialTheme.colorScheme.primary
                     )
-                    Column {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 4.dp)
+                    ) {
                         Text(
                             text = "Davoo Player",
                             style = MaterialTheme.typography.titleLarge
@@ -299,63 +331,58 @@ fun CreditsBottomSheet(
                         )
                     }
                 }
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.testTag("close_credits_button")
+
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp)
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Cerrar créditos y legal")
-                }
-            }
-
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(vertical = 2.dp)
-            ) {
-                items(AboutSheetSection.entries) { section ->
-                    val selected = selectedSection == section
-                    FilterChip(
-                        selected = selected,
-                        onClick = { selectedSection = section },
-                        label = { Text(section.label) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = CopperAmber.copy(alpha = 0.2f),
-                            selectedLabelColor = CopperAmber
-                        ),
-                        modifier = Modifier.testTag(section.tag)
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 460.dp)
-                    .verticalScroll(contentScrollState),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                when (selectedSection) {
-                    AboutSheetSection.ABOUT -> {
-                        AboutOverviewSection(
-                            supportFeedback = supportFeedback,
-                            onSendSupportEmail = {
-                                val launched = openSupportEmail(context)
-                                supportFeedback = if (launched) {
-                                    "Abriendo cliente de correo…"
-                                } else {
-                                    copyEmailToClipboard(context)
-                                    "No hay app de correo instalada. Dirección copiada al portapapeles."
-                                }
-                            },
-                            onCopySupportEmail = {
-                                copyEmailToClipboard(context)
-                                supportFeedback = "Correo copiado: $SUPPORT_EMAIL"
-                            },
-                            onNavigateSection = { selectedSection = it }
+                    items(AboutSheetSection.entries) { section ->
+                        val selected = selectedSection == section
+                        FilterChip(
+                            selected = selected,
+                            onClick = { selectedSection = section },
+                            label = { Text(section.label) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
+                                selectedLabelColor = MaterialTheme.colorScheme.primary
+                            ),
+                            modifier = Modifier.testTag(section.tag)
                         )
                     }
-                    AboutSheetSection.LEGAL -> LegalDocumentsSection()
-                    AboutSheetSection.LICENSES -> IntellectualPropertySection()
-                    AboutSheetSection.CHANGELOG -> ChangelogSection()
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(contentScrollState)
+                        .padding(bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    when (selectedSection) {
+                        AboutSheetSection.ABOUT -> {
+                            AboutOverviewSection(
+                                supportFeedback = supportFeedback,
+                                onSendSupportEmail = {
+                                    val launched = openSupportEmail(context)
+                                    supportFeedback = if (launched) {
+                                        "Abriendo cliente de correo…"
+                                    } else {
+                                        copyEmailToClipboard(context)
+                                        "No hay app de correo instalada. Dirección copiada al portapapeles."
+                                    }
+                                },
+                                onCopySupportEmail = {
+                                    copyEmailToClipboard(context)
+                                    supportFeedback = "Correo copiado: $SUPPORT_EMAIL"
+                                },
+                                onNavigateSection = { selectedSection = it }
+                            )
+                        }
+                        AboutSheetSection.LEGAL -> LegalDocumentsSection()
+                        AboutSheetSection.LICENSES -> IntellectualPropertySection()
+                        AboutSheetSection.CHANGELOG -> ChangelogSection()
+                    }
                 }
             }
         }
@@ -372,7 +399,7 @@ private fun AboutOverviewSection(
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.45f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("credits_davoopunk")
@@ -386,13 +413,13 @@ private fun AboutOverviewSection(
         ) {
             Surface(
                 shape = RoundedCornerShape(14.dp),
-                color = CopperAmber.copy(alpha = 0.16f),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Person,
                     contentDescription = null,
-                    tint = CopperAmber,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(11.dp)
                 )
             }
@@ -403,7 +430,7 @@ private fun AboutOverviewSection(
                 Text(
                     text = "DESARROLLADO POR",
                     style = MaterialTheme.typography.labelSmall,
-                    color = CopperAmber,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
@@ -434,7 +461,7 @@ private fun AboutOverviewSection(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.Email, contentDescription = null, tint = LosslessCyan, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Email, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(18.dp))
                 Text("Canal de Contacto y Soporte", style = MaterialTheme.typography.titleSmall)
             }
             Text(
@@ -446,7 +473,7 @@ private fun AboutOverviewSection(
                 text = SUPPORT_EMAIL,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
-                color = LosslessCyan
+                color = MaterialTheme.colorScheme.secondary
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
@@ -470,7 +497,7 @@ private fun AboutOverviewSection(
                 Text(
                     text = supportFeedback,
                     style = MaterialTheme.typography.labelSmall,
-                    color = CopperAmber
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }
@@ -489,7 +516,7 @@ private fun AboutOverviewSection(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.Info, contentDescription = null, tint = CopperAmber, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Text("Accesos directos legales y transparencia", style = MaterialTheme.typography.titleSmall)
             }
             Text(
@@ -601,7 +628,7 @@ private fun IntellectualPropertySection() {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
         modifier = Modifier.fillMaxWidth().testTag("license_proprietary_card")
     ) {
         Column(
@@ -612,7 +639,7 @@ private fun IntellectualPropertySection() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.Copyright, contentDescription = null, tint = CopperAmber, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Copyright, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
                 Text("Licencia de Código Abierto (MIT)", style = MaterialTheme.typography.titleSmall)
             }
             Text(
@@ -641,7 +668,7 @@ private fun IntellectualPropertySection() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.Palette, contentDescription = null, tint = LosslessCyan, modifier = Modifier.size(18.dp))
+                Icon(Icons.Rounded.Palette, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(18.dp))
                 Text("Derechos de Recursos Visuales y Tipografía", style = MaterialTheme.typography.titleSmall)
             }
             Text(
@@ -657,11 +684,11 @@ private fun IntellectualPropertySection() {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.padding(top = 4.dp)
     ) {
-        Icon(Icons.Rounded.Code, contentDescription = null, tint = LosslessCyan, modifier = Modifier.size(18.dp))
+        Icon(Icons.Rounded.Code, contentDescription = null, tint = MaterialTheme.colorScheme.secondary, modifier = Modifier.size(18.dp))
         Text(
             text = "Atribuciones de Terceros (Open Source Notices)",
             style = MaterialTheme.typography.titleSmall,
-            color = LosslessCyan
+            color = MaterialTheme.colorScheme.secondary
         )
     }
 
@@ -690,7 +717,7 @@ private fun IntellectualPropertySection() {
                         Text(
                             text = notice.license,
                             style = MaterialTheme.typography.labelSmall,
-                            color = CopperAmber
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                     Text(
@@ -715,7 +742,7 @@ private fun ChangelogSection() {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Icon(Icons.Rounded.History, contentDescription = null, tint = CopperAmber, modifier = Modifier.size(18.dp))
+        Icon(Icons.Rounded.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
         Text("Registro de Cambios (Changelog)", style = MaterialTheme.typography.titleSmall)
     }
 
@@ -724,7 +751,7 @@ private fun ChangelogSection() {
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
             border = if (release.tag == "Actual") {
-                BorderStroke(1.dp, CopperAmber.copy(alpha = 0.45f))
+                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
             } else null,
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -741,12 +768,12 @@ private fun ChangelogSection() {
                         text = release.version,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = if (release.tag == "Actual") CopperAmber else MaterialTheme.colorScheme.onSurface
+                        color = if (release.tag == "Actual") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = release.tag,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (release.tag == "Actual") LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (release.tag == "Actual") MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 release.items.forEach { line ->
@@ -785,7 +812,7 @@ private fun ExpandableLegalCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(icon, contentDescription = null, tint = CopperAmber, modifier = Modifier.size(20.dp))
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                     Text(
@@ -803,8 +830,8 @@ private fun ExpandableLegalCard(
                 Column(modifier = Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.Rounded.Description, contentDescription = null, modifier = Modifier.size(14.dp), tint = LosslessCyan)
-                        Text("Documento completo", style = MaterialTheme.typography.labelSmall, color = LosslessCyan)
+                        Icon(Icons.Rounded.Description, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.secondary)
+                        Text("Documento completo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
                     }
                     Text(
                         text = body,

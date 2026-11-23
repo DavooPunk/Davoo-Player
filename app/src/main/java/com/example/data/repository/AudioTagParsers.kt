@@ -21,6 +21,35 @@ object AudioTagParsers {
     private val lrcTimeRegex = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?]")
     private val replayGainRegex = Regex("([-+]?\\d+(?:\\.\\d+)?)\\s*dB", RegexOption.IGNORE_CASE)
 
+    fun isInstrumentalMarkerText(raw: String): Boolean {
+        val stripped = raw.trim()
+        if (stripped.isEmpty()) return true
+        if (stripped.equals("[instrumental]", ignoreCase = true) ||
+            stripped.equals("(instrumental)", ignoreCase = true) ||
+            stripped.equals("instrumental", ignoreCase = true) ||
+            stripped.equals("[music]", ignoreCase = true) ||
+            stripped.equals("(music)", ignoreCase = true)
+        ) {
+            return true
+        }
+        val withoutMusicEmoji = stripped.replace("🎵", "").replace("🎶", "").trim()
+        if (withoutMusicEmoji.isEmpty()) return true
+        return withoutMusicEmoji.all { ch ->
+            ch.isWhitespace() ||
+                ch == '.' ||
+                ch == '…' ||
+                ch == '-' ||
+                ch == '—' ||
+                ch == '~' ||
+                ch == '♪' ||
+                ch == '♫' ||
+                ch == '♩' ||
+                ch == '♬' ||
+                ch == '•' ||
+                ch == '*'
+        }
+    }
+
     fun parseLrcText(rawText: String, sourceLabel: String): LyricsData? {
         val trimmed = rawText.removePrefix("\uFEFF").trim()
         if (trimmed.isEmpty()) return null
@@ -32,6 +61,7 @@ object AudioTagParsers {
             val matches = lrcTimeRegex.findAll(line).toList()
             if (matches.isNotEmpty()) {
                 val lyricContent = line.replace(lrcTimeRegex, "").trim()
+                val isInstr = isInstrumentalMarkerText(lyricContent)
                 matches.forEach { m ->
                     val mins = m.groupValues[1].toLongOrNull() ?: 0L
                     val secs = m.groupValues[2].toLongOrNull() ?: 0L
@@ -43,26 +73,34 @@ object AudioTagParsers {
                         else -> fracStr.take(3).toLongOrNull() ?: 0L
                     }
                     val totalMs = mins * 60_000L + secs * 1_000L + millis
-                    if (lyricContent.isNotEmpty()) {
-                        syncedLines.add(LyricLine(timestampMs = totalMs, text = lyricContent))
-                    }
+                    syncedLines.add(
+                        LyricLine(
+                            timestampMs = totalMs,
+                            text = if (isInstr) "" else lyricContent,
+                            isInstrumental = isInstr
+                        )
+                    )
                 }
             } else if (!line.startsWith("[") && line.isNotBlank()) {
                 plainLines.add(LyricLine(timestampMs = null, text = line.trim()))
             }
         }
 
+        val hasAnyVocalOrExplicitSymbol = syncedLines.any { !it.isInstrumental } ||
+            rawText.contains("♪") || rawText.contains("...") || rawText.contains("…")
+
         return when {
-            syncedLines.isNotEmpty() -> {
+            syncedLines.isNotEmpty() && hasAnyVocalOrExplicitSymbol -> {
                 val sorted = syncedLines.sortedBy { it.timestampMs ?: 0L }
                 val (merged, isBilingual) = mergeBilingualSyncedLines(sorted)
+                val withInterludes = insertInstrumentalInterludes(merged)
                 val finalLabel = if (isBilingual && !sourceLabel.contains("Bilingüe", ignoreCase = true)) {
                     "$sourceLabel · Bilingüe"
                 } else {
                     sourceLabel
                 }
                 LyricsData(
-                    lines = merged,
+                    lines = withInterludes,
                     isSynced = true,
                     sourceLabel = finalLabel,
                     hasEmbeddedTranslation = isBilingual
@@ -76,6 +114,49 @@ object AudioTagParsers {
             else -> null
         }
     }
+
+    /**
+     * Automatically inserts Spotify-style instrumental markers when the first lyric starts after
+     * 5,000 ms (intro instrumental) or when a pause longer than 8,000 ms exists between two lines
+     * (positioned 3,500 ms after the previous line).
+     */
+    private fun insertInstrumentalInterludes(lines: List<LyricLine>): List<LyricLine> {
+        if (lines.isEmpty()) return lines
+        val result = ArrayList<LyricLine>(lines.size + 4)
+
+        val firstSynced = lines.firstOrNull { it.timestampMs != null }
+        val firstTs = firstSynced?.timestampMs
+        if (firstTs != null && firstTs > INTRO_INSTRUMENTAL_THRESHOLD_MS && !firstSynced.isInstrumental) {
+            result.add(LyricLine(timestampMs = 0L, text = "", isInstrumental = true))
+        }
+
+        for (i in lines.indices) {
+            val current = lines[i]
+            result.add(current)
+            val next = lines.getOrNull(i + 1) ?: continue
+            val currTs = current.timestampMs
+            val nextTs = next.timestampMs
+            if (currTs != null &&
+                nextTs != null &&
+                !current.isInstrumental &&
+                !next.isInstrumental &&
+                (nextTs - currTs) > INTERLUDE_GAP_THRESHOLD_MS
+            ) {
+                result.add(
+                    LyricLine(
+                        timestampMs = currTs + INTERLUDE_MARKER_OFFSET_MS,
+                        text = "",
+                        isInstrumental = true
+                    )
+                )
+            }
+        }
+        return result
+    }
+
+    private const val INTRO_INSTRUMENTAL_THRESHOLD_MS = 5_000L
+    private const val INTERLUDE_GAP_THRESHOLD_MS = 8_000L
+    private const val INTERLUDE_MARKER_OFFSET_MS = 3_500L
 
     /**
      * Detects bilingual `.lrc` files where two consecutive lines share the exact same timestamp
@@ -94,20 +175,35 @@ object AudioTagParsers {
             }
         }
 
-        val pairedCount = grouped.count { group ->
-            group.size >= 2 && !group[0].text.equals(group[1].text, ignoreCase = true)
+        val vocalGroups = grouped.filter { group -> group.any { !it.isInstrumental && it.text.isNotBlank() } }
+        val pairedCount = vocalGroups.count { group ->
+            val distinctTexts = group.filter { !it.isInstrumental && it.text.isNotBlank() }
+                .map { it.text.trim() }
+            distinctTexts.size >= 2 && !distinctTexts[0].equals(distinctTexts[1], ignoreCase = true)
         }
-        val isBilingual = pairedCount >= 2 && (pairedCount.toFloat() / grouped.size.toFloat()) >= 0.3f
-        if (!isBilingual) return sorted to false
+        val isBilingual = vocalGroups.isNotEmpty() &&
+            pairedCount >= 2 &&
+            (pairedCount.toFloat() / vocalGroups.size.toFloat()) >= 0.3f
+        if (!isBilingual) {
+            val deduped = grouped.map { group ->
+                group.firstOrNull { !it.isInstrumental && it.text.isNotBlank() } ?: group.first()
+            }
+            return deduped to false
+        }
 
         val merged = grouped.map { group ->
-            val primary = group.first()
-            val secondary = group.drop(1)
-                .map { it.text.trim() }
-                .filter { it.isNotEmpty() && !it.equals(primary.text, ignoreCase = true) }
-                .joinToString(" / ")
-                .ifEmpty { null }
-            primary.copy(secondaryText = secondary)
+            val vocalEntries = group.filter { !it.isInstrumental && it.text.isNotBlank() }
+            if (vocalEntries.isEmpty()) {
+                group.first().copy(text = "", secondaryText = null, isInstrumental = true)
+            } else {
+                val primary = vocalEntries.first()
+                val secondary = vocalEntries.drop(1)
+                    .map { it.text.trim() }
+                    .filter { it.isNotEmpty() && !it.equals(primary.text, ignoreCase = true) }
+                    .joinToString(" / ")
+                    .ifEmpty { null }
+                primary.copy(secondaryText = secondary)
+            }
         }
         return merged to true
     }
@@ -126,30 +222,47 @@ object AudioTagParsers {
 
         val parsedCandidate = parseLrcText(cleaned, sourceLabel)
         val alignedLines: List<LyricLine> = if (parsedCandidate != null && parsedCandidate.isSynced && original.isSynced) {
-            val byTimestamp = parsedCandidate.lines.associateBy { it.timestampMs }
-            original.lines.mapIndexed { index, origLine ->
-                val matchedText = byTimestamp[origLine.timestampMs]?.text
-                    ?: parsedCandidate.lines.getOrNull(index)?.text
-                    ?: origLine.text
-                LyricLine(timestampMs = origLine.timestampMs, text = matchedText)
+            val byTimestamp = parsedCandidate.lines
+                .filter { !it.isInstrumental && it.text.isNotBlank() }
+                .associateBy { it.timestampMs }
+            val candidateVocal = parsedCandidate.lines.filter { !it.isInstrumental && it.text.isNotBlank() }
+            var vocalCursor = 0
+            original.lines.map { origLine ->
+                if (origLine.isInstrumental || origLine.text.isBlank()) {
+                    LyricLine(timestampMs = origLine.timestampMs, text = "", isInstrumental = origLine.isInstrumental)
+                } else {
+                    val matchedText = byTimestamp[origLine.timestampMs]?.text
+                        ?: candidateVocal.getOrNull(vocalCursor)?.text
+                        ?: origLine.text
+                    vocalCursor++
+                    LyricLine(timestampMs = origLine.timestampMs, text = matchedText)
+                }
             }
         } else {
             val rawLines = cleaned.lines().map { it.trim() }
             // Preserve exact 1-to-1 line count if it already matches original lines (e.g., saved Room cache)
             if (rawLines.size == original.lines.size) {
                 original.lines.mapIndexed { index, origLine ->
-                    LyricLine(
-                        timestampMs = origLine.timestampMs,
-                        text = rawLines[index].ifEmpty { origLine.text }
-                    )
+                    if (origLine.isInstrumental) {
+                        LyricLine(timestampMs = origLine.timestampMs, text = "", isInstrumental = true)
+                    } else {
+                        LyricLine(
+                            timestampMs = origLine.timestampMs,
+                            text = rawLines[index].ifEmpty { origLine.text }
+                        )
+                    }
                 }
             } else {
                 val nonEmptyTranslated = rawLines.filter { it.isNotEmpty() }
                 if (nonEmptyTranslated.isEmpty()) return null
                 var cursor = 0
                 original.lines.map { origLine ->
-                    if (origLine.text.isBlank()) {
-                        LyricLine(timestampMs = origLine.timestampMs, text = "")
+                    if (origLine.isInstrumental || origLine.text.isBlank()) {
+                        LyricLine(
+                            timestampMs = origLine.timestampMs,
+                            text = "",
+                            isInstrumental = origLine.isInstrumental
+                        )
                     } else {
                         val next = nonEmptyTranslated.getOrNull(cursor)?.also { cursor++ }
                         LyricLine(timestampMs = origLine.timestampMs, text = next ?: origLine.text)
@@ -166,7 +279,9 @@ object AudioTagParsers {
     }
 
     fun serializeTranslationLines(translated: LyricsData): String {
-        return translated.lines.joinToString(separator = "\n") { it.text.replace("\n", " ").trim() }
+        return translated.lines.joinToString(separator = "\n") {
+            if (it.isInstrumental) "" else it.text.replace("\n", " ").trim()
+        }
     }
 
     fun formatLrcTimestamp(timestampMs: Long): String {
@@ -196,7 +311,7 @@ object AudioTagParsers {
         val transLines = translatedLyrics?.lines
         lyrics.lines.forEachIndexed { idx, line ->
             val cleanText = line.text.trim()
-            if (cleanText.isEmpty()) return@forEachIndexed
+            if (line.isInstrumental || cleanText.isEmpty()) return@forEachIndexed
             val translated = if (includeTranslation) {
                 (transLines?.getOrNull(idx)?.text ?: line.secondaryText)
                     ?.trim()

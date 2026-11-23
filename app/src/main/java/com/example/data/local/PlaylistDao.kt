@@ -13,6 +13,13 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
     fun observePlaylistsWithEntries(): Flow<List<PlaylistWithEntries>>
 
+    @Transaction
+    @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
+    suspend fun getAllPlaylistsWithEntriesOnce(): List<PlaylistWithEntries>
+
+    @Query("SELECT * FROM playlists WHERE LOWER(name) = LOWER(:name) LIMIT 1")
+    suspend fun findByNameIgnoreCase(name: String): PlaylistEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPlaylist(playlist: PlaylistEntity): Long
 
@@ -80,11 +87,17 @@ interface TrackStatsDao {
     @Query("SELECT * FROM track_stats")
     fun observeAllStats(): Flow<List<TrackStatsEntity>>
 
+    @Query("SELECT * FROM track_stats")
+    suspend fun getAllStatsOnce(): List<TrackStatsEntity>
+
     @Query("SELECT * FROM track_stats WHERE trackId = :trackId LIMIT 1")
     suspend fun getStatsForTrack(trackId: String): TrackStatsEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(stats: TrackStatsEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(stats: List<TrackStatsEntity>)
 
     @Transaction
     suspend fun setFavorite(trackId: String, isFavorite: Boolean): Boolean {
@@ -137,8 +150,14 @@ interface TrackTagOverrideDao {
     @Query("SELECT * FROM track_tag_overrides")
     fun observeAllOverrides(): Flow<List<TrackTagOverrideEntity>>
 
+    @Query("SELECT * FROM track_tag_overrides")
+    suspend fun getAllOverridesOnce(): List<TrackTagOverrideEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(override: TrackTagOverrideEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(overrides: List<TrackTagOverrideEntity>)
 
     @Query("DELETE FROM track_tag_overrides WHERE trackId IN (:trackIds)")
     suspend fun deleteOverridesForTracks(trackIds: List<String>)
@@ -148,6 +167,9 @@ interface TrackTagOverrideDao {
 interface ExcludedFolderDao {
     @Query("SELECT * FROM excluded_folders ORDER BY folderName ASC")
     fun observeExcludedFolders(): Flow<List<ExcludedFolderEntity>>
+
+    @Query("SELECT * FROM excluded_folders ORDER BY folderName ASC")
+    suspend fun getAllExcludedOnce(): List<ExcludedFolderEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun excludeFolder(entity: ExcludedFolderEntity)

@@ -24,6 +24,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -86,6 +87,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -128,6 +130,8 @@ import com.example.model.AudioTrackMetadata
 import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
 import com.example.model.SmartPlaylistType
+import com.example.share.ShareExportUiState
+import com.example.ui.components.AppearanceCustomizationSheet
 import com.example.ui.components.AudioAlbumArtThumbnail
 import com.example.ui.components.BatchAddToPlaylistBottomSheet
 import com.example.ui.components.CreateOrEditPlaylistDialog
@@ -135,6 +139,7 @@ import com.example.ui.components.CreditsBottomSheet
 import com.example.ui.components.EqualizerAndDspSheet
 import com.example.ui.components.FoldersExclusionSheet
 import com.example.ui.components.LyricsBottomSheet
+import com.example.ui.components.LyricsShareSheet
 import com.example.ui.components.Media3FloatingBottomBar
 import com.example.ui.components.MiniPlayerBar
 import com.example.ui.components.PlaylistMosaicCover
@@ -154,8 +159,6 @@ import com.example.ui.screens.PlaylistsScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SmartPlaylistDetailScreen
 import com.example.ui.theme.ArtworkColorExtractor
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 import com.example.ui.viewmodel.SonoraUiState
 import com.example.ui.viewmodel.SonoraViewModel
 import kotlinx.coroutines.Dispatchers
@@ -249,6 +252,10 @@ fun SonoraApp(
     val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     val lastFmUiState by viewModel.lastFmUiState.collectAsStateWithLifecycle()
     val scrobbleNotice by viewModel.scrobbleNotice.collectAsStateWithLifecycle()
+    val shareExportState by viewModel.shareExportState.collectAsStateWithLifecycle()
+    val appearancePreferences by viewModel.appearancePreferences.collectAsStateWithLifecycle()
+    val isBackupBusy by viewModel.isBackupBusy.collectAsStateWithLifecycle()
+    val systemDark = isSystemInDarkTheme()
     var requestedArtistDrilldown by remember { mutableStateOf<String?>(null) }
 
     val navController = rememberNavController()
@@ -273,6 +280,7 @@ fun SonoraApp(
     var showSleepTimerSheet by remember { mutableStateOf(false) }
     var showFoldersSheet by remember { mutableStateOf(false) }
     var showCreditsSheet by remember { mutableStateOf(false) }
+    var showAppearanceSheet by remember { mutableStateOf(false) }
 
     var metadataTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var loadedTrackMetadata by remember { mutableStateOf<AudioTrackMetadata?>(null) }
@@ -288,6 +296,48 @@ fun SonoraApp(
     var loadedLyrics by remember { mutableStateOf<LyricsData?>(null) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
 
+    var shareSnippetTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var lastShareSnippetTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    LaunchedEffect(shareSnippetTargetTrack) {
+        if (shareSnippetTargetTrack != null) {
+            lastShareSnippetTrack = shareSnippetTargetTrack
+        }
+    }
+    var shareSnippetLyrics by remember { mutableStateOf<LyricsData?>(null) }
+    var shareSnippetTranslatedLyrics by remember { mutableStateOf<LyricsData?>(null) }
+    var shareSnippetIncludeTranslation by remember { mutableStateOf(false) }
+    var shareSnippetInitialPosMs by remember { mutableLongStateOf(0L) }
+    var resumeMainAfterShare by remember { mutableStateOf(false) }
+
+    val openShareSnippet: (
+        track: AudioTrack,
+        explicitLyrics: LyricsData?,
+        explicitTranslated: LyricsData?,
+        includeTranslation: Boolean,
+        initialPosMs: Long
+    ) -> Unit = { track, explicitLyrics, explicitTranslated, includeTranslation, initialPosMs ->
+        val wasPlaying = viewModel.pauseMainForSharePreview()
+        resumeMainAfterShare = wasPlaying
+        shareSnippetInitialPosMs = initialPosMs.coerceAtLeast(0L)
+        shareSnippetIncludeTranslation = includeTranslation
+        viewModel.resetShareExportState()
+        if (explicitLyrics != null) {
+            shareSnippetLyrics = explicitLyrics
+            shareSnippetTranslatedLyrics = explicitTranslated
+            shareSnippetTargetTrack = track
+        } else {
+            coroutineScope.launch {
+                val fetchedLyrics = viewModel.loadLyrics(track)
+                val resolvedTrans = (viewModel.lyricsTranslationState.value as? LyricsTranslationUiState.Success)
+                    ?.takeIf { it.trackId == track.id }
+                    ?.translatedLyrics
+                shareSnippetLyrics = fetchedLyrics
+                shareSnippetTranslatedLyrics = resolvedTrans
+                shareSnippetTargetTrack = track
+            }
+        }
+    }
+
     var tagEditorTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var pickedCustomCoverUri by remember { mutableStateOf<String?>(null) }
 
@@ -296,17 +346,21 @@ fun SonoraApp(
     var requestedNotificationPerm by remember { mutableStateOf(false) }
 
     // Dynamic accent color for floating bottom bar
+    val themePrimary = MaterialTheme.colorScheme.primary
+    val themeSecondary = MaterialTheme.colorScheme.secondary
     var dynamicBottomBarAccent by remember(playbackState.currentTrack?.id) { mutableStateOf<Color?>(null) }
     LaunchedEffect(
         playbackState.currentTrack?.id,
         playbackState.currentTrack?.albumArtUri,
-        audioSettings.dynamicArtworkColors
+        appearancePreferences.dynamicArtworkColors,
+        themePrimary,
+        themeSecondary
     ) {
         val current = playbackState.currentTrack
-        dynamicBottomBarAccent = if (current != null && audioSettings.dynamicArtworkColors) {
+        dynamicBottomBarAccent = if (current != null && appearancePreferences.dynamicArtworkColors) {
             val base = if (current.format == AudioFormat.FLAC || current.format == AudioFormat.WAV) {
-                LosslessCyan
-            } else CopperAmber
+                themeSecondary
+            } else themePrimary
             ArtworkColorExtractor.extractAccentColor(
                 context = context,
                 audioUri = current.contentUri,
@@ -399,6 +453,22 @@ fun SonoraApp(
         pendingExportLrcContent = null
         if (uri != null && content != null) {
             viewModel.exportLyricsToUri(uri, content)
+        }
+    }
+
+    val exportBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportBackupToUri(uri)
+        }
+    }
+
+    val importBackupLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importBackupFromUri(uri)
         }
     }
 
@@ -932,6 +1002,15 @@ fun SonoraApp(
                                 onSelectTranslationEngine = viewModel::setPreferredTranslationEngine,
                                 onOpenAboutAndLegal = { showCreditsSheet = true },
                                 bottomContentPadding = bottomContentPadding,
+                                appearancePreferences = appearancePreferences,
+                                onSelectThemeMode = { mode -> viewModel.setThemeMode(mode, systemDark) },
+                                onOpenAppearanceCustomization = { showAppearanceSheet = true },
+                                onToggleDynamicArtworkColors = viewModel::toggleDynamicArtworkColors,
+                                isBackupBusy = isBackupBusy,
+                                onExportBackup = { exportBackupLauncher.launch(viewModel.suggestBackupFileName()) },
+                                onImportBackup = {
+                                    importBackupLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                },
                                 autoCheckUpdatesEnabled = updateUiState.autoCheckEnabled,
                                 isCheckingUpdates = updateUiState.isChecking,
                                 updateStatusSubtitle = updateUiState.lastStatusMessage,
@@ -1423,7 +1502,75 @@ fun SonoraApp(
                             }
                         }
                     },
-                    livePositionFlow = if (isCurrentTrack) viewModel.playbackPosition else null
+                    livePositionFlow = if (isCurrentTrack) viewModel.playbackPosition else null,
+                    onShareSnippet = { includeTrans ->
+                        val initialPos = if (isCurrentTrack) {
+                            viewModel.playbackPosition.value.positionMs
+                        } else {
+                            0L
+                        }
+                        openShareSnippet(
+                            target,
+                            loadedLyrics,
+                            translatedForTarget,
+                            includeTrans,
+                            initialPos
+                        )
+                    }
+                )
+            }
+        }
+
+        // Native 9:16 Video (.mp4) & Image (.png) Lyrics / Snippet Share overlay
+        AnimatedVisibility(
+            visible = shareSnippetTargetTrack != null,
+            enter = slideInVertically(animationSpec = tween(260)) { it } + fadeIn(animationSpec = tween(180)),
+            exit = slideOutVertically(animationSpec = tween(240)) { it } + fadeOut(animationSpec = tween(160)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val target = shareSnippetTargetTrack ?: lastShareSnippetTrack
+            if (target != null) {
+                val isCurrentTrack = playbackState.currentTrack?.id == target.id
+                LyricsShareSheet(
+                    track = target,
+                    lyrics = shareSnippetLyrics,
+                    translatedLyrics = shareSnippetTranslatedLyrics,
+                    initialPositionMs = shareSnippetInitialPosMs,
+                    initialIncludeTranslation = shareSnippetIncludeTranslation,
+                    dynamicArtworkColorsEnabled = audioSettings.dynamicArtworkColors,
+                    dynamicAccentColor = if (isCurrentTrack) dynamicBottomBarAccent else null,
+                    exportState = shareExportState,
+                    onStartExport = viewModel::startLyricsShareExport,
+                    onCancelExport = viewModel::cancelLyricsShareExport,
+                    onExportReady = { ready ->
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = ready.mimeType
+                            putExtra(Intent.EXTRA_STREAM, ready.uri)
+                            putExtra(Intent.EXTRA_SUBJECT, "${target.artist} - ${target.title}")
+                            putExtra(Intent.EXTRA_TEXT, "Compartido desde Davoo Player · ${target.title} — ${target.artist}")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val opened = runCatching {
+                            context.startActivity(
+                                Intent.createChooser(shareIntent, "Compartir fragmento")
+                            )
+                        }.isSuccess
+                        if (!opened) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("No se encontró una aplicación para compartir el archivo")
+                            }
+                        }
+                        viewModel.resetShareExportState()
+                    },
+                    onDismiss = {
+                        val shouldResume = resumeMainAfterShare
+                        resumeMainAfterShare = false
+                        shareSnippetTargetTrack = null
+                        shareSnippetLyrics = null
+                        shareSnippetTranslatedLyrics = null
+                        viewModel.cancelLyricsShareExport()
+                        viewModel.restoreMainAfterSharePreview(shouldResume)
+                    }
                 )
             }
         }
@@ -1535,6 +1682,17 @@ fun SonoraApp(
         )
     }
 
+    // Full-screen Appearance & Color Customization sheet
+    if (showAppearanceSheet) {
+        AppearanceCustomizationSheet(
+            appearance = appearancePreferences,
+            onUpdateAppearance = viewModel::updateAppearancePreferences,
+            onSelectPreset = { preset -> viewModel.selectThemePreset(preset, systemDark) },
+            onResetToDefaults = viewModel::resetAppearanceToDefaults,
+            onDismiss = { showAppearanceSheet = false }
+        )
+    }
+
     // In-app Tag, Filename & Cover Editor sheet (uses zero-permission Photo Picker)
     tagEditorTargetTrack?.let { target ->
         TagEditorBottomSheet(
@@ -1628,7 +1786,7 @@ fun SonoraApp(
         AlertDialog(
             onDismissRequest = viewModel::dismissConfigureGithubRepo,
             icon = {
-                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = LosslessCyan)
+                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
             },
             title = { Text("Repositorio de GitHub") },
             text = {
@@ -1673,7 +1831,7 @@ fun SonoraApp(
         AlertDialog(
             onDismissRequest = viewModel::dismissAvailableUpdate,
             icon = {
-                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = CopperAmber)
+                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             },
             title = { Text("Nueva versión disponible: v${updateInfo.latestVersion}") },
             text = {
@@ -1735,7 +1893,7 @@ fun SonoraApp(
         AlertDialog(
             onDismissRequest = viewModel::dismissLastFmCredentialsDialog,
             icon = {
-                Icon(Icons.Rounded.Key, contentDescription = null, tint = CopperAmber)
+                Icon(Icons.Rounded.Key, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             },
             title = { Text("Credenciales API de Last.fm") },
             text = {
@@ -1846,7 +2004,7 @@ fun GlobalSearchOverlay(
                         )
                     },
                     leadingIcon = {
-                        Icon(Icons.Rounded.Search, contentDescription = null, tint = CopperAmber)
+                        Icon(Icons.Rounded.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     },
                     trailingIcon = {
                         if (localQuery.isNotEmpty()) {
@@ -1962,7 +2120,7 @@ fun GlobalSearchOverlay(
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.dp,
-                                    color = CopperAmber
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                                 Text(
                                     text = "Buscando «$trimmed»…",
@@ -2004,7 +2162,7 @@ fun GlobalSearchOverlay(
                             Text(
                                 text = "Álbumes (${uiState.globalMatchingAlbums.size})",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = CopperAmber,
+                                color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -2059,7 +2217,7 @@ fun GlobalSearchOverlay(
                             Text(
                                 text = "Artistas (${uiState.globalMatchingArtists.size})",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = LosslessCyan,
+                                color = MaterialTheme.colorScheme.secondary,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -2083,14 +2241,14 @@ fun GlobalSearchOverlay(
                                 ) {
                                     Surface(
                                         shape = CircleShape,
-                                        color = LosslessCyan.copy(alpha = 0.16f),
+                                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
                                         modifier = Modifier.size(44.dp)
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 Icons.Rounded.Person,
                                                 contentDescription = null,
-                                                tint = LosslessCyan
+                                                tint = MaterialTheme.colorScheme.secondary
                                             )
                                         }
                                     }
@@ -2118,7 +2276,7 @@ fun GlobalSearchOverlay(
                             Text(
                                 text = "Listas (${uiState.globalMatchingPlaylists.size})",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = CopperAmber,
+                                color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
                             )
                         }

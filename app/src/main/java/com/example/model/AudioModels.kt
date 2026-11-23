@@ -1,5 +1,7 @@
 package com.example.model
 
+import androidx.compose.runtime.Immutable
+
 enum class AudioFormat(val label: String) {
     FLAC("FLAC"),
     MP3("MP3"),
@@ -37,6 +39,7 @@ enum class SmartPlaylistType(val title: String, val subtitle: String) {
     HISTORY("Historial reciente", "Reproducidas últimamente")
 }
 
+@Immutable
 data class AudioTrack(
     val id: String,
     val contentUri: String,
@@ -65,6 +68,7 @@ data class AudioTrack(
     val sourceTreeUri: String? = null
 )
 
+@Immutable
 data class AudioTechSpecs(
     val sampleRateHz: Int? = null,
     val bitrateBps: Int? = null,
@@ -102,6 +106,7 @@ data class AudioTechSpecs(
     }
 }
 
+@Immutable
 data class AudioTrackMetadata(
     val title: String,
     val artist: String,
@@ -120,6 +125,7 @@ data class AudioTrackMetadata(
     val replayGainDb: Float? = null
 )
 
+@Immutable
 data class AlbumGroup(
     val albumName: String,
     val artist: String,
@@ -131,6 +137,7 @@ data class AlbumGroup(
     val genre: String? = null
 )
 
+@Immutable
 data class ArtistGroup(
     val artistName: String,
     val albumCount: Int,
@@ -139,12 +146,14 @@ data class ArtistGroup(
     val totalDurationMs: Long
 )
 
+@Immutable
 data class GenreGroup(
     val genreName: String,
     val tracks: List<AudioTrack>,
     val totalDurationMs: Long
 )
 
+@Immutable
 data class FolderGroup(
     val folderName: String,
     val tracks: List<AudioTrack>,
@@ -152,6 +161,7 @@ data class FolderGroup(
     val isExcluded: Boolean = false
 )
 
+@Immutable
 data class SdCardFolder(
     val treeUri: String,
     val displayName: String,
@@ -159,6 +169,7 @@ data class SdCardFolder(
     val trackCount: Int = 0
 )
 
+@Immutable
 data class PlaylistSummary(
     val id: Long,
     val name: String,
@@ -172,12 +183,15 @@ data class PlaylistSummary(
     val hasFlac: Boolean get() = tracks.any { it.format == AudioFormat.FLAC }
 }
 
+@Immutable
 data class LyricLine(
     val timestampMs: Long?,
     val text: String,
-    val secondaryText: String? = null
+    val secondaryText: String? = null,
+    val isInstrumental: Boolean = false
 )
 
+@Immutable
 data class LyricsData(
     val lines: List<LyricLine>,
     val isSynced: Boolean,
@@ -223,6 +237,7 @@ enum class EqPreset(val label: String, val gainsMb: List<Int>, val recommendedPr
     }
 }
 
+@Immutable
 data class HeadphoneEqProfile(
     val id: String,
     val brand: String,
@@ -320,6 +335,7 @@ object AutoEqProfilesCatalog {
     )
 }
 
+@Immutable
 data class AudioSettings(
     val eqEnabled: Boolean = false,
     val eqPreset: EqPreset = EqPreset.FLAT,
@@ -337,6 +353,7 @@ data class AudioSettings(
     val dynamicArtworkColors: Boolean = true
 )
 
+@Immutable
 data class EqBandInfo(
     val index: Int,
     val centerFreqHz: Int,
@@ -345,39 +362,49 @@ data class EqBandInfo(
     val currentLevelMb: Int
 )
 
-enum class ThemeMode(val label: String) {
-    OBSIDIAN("Obsidiana"),
-    AMOLED("OLED"),
-    LIGHT("Marfil"),
-    SYSTEM("Sistema")
+enum class AppThemeMode(val label: String, val description: String) {
+    DARK("Oscuro", "Tema oscuro clásico (por defecto)"),
+    LIGHT("Claro", "Superficies claras de alto contraste"),
+    SYSTEM("Automático", "Sigue el tema claro u oscuro del sistema")
 }
 
-enum class AccentPalette(val label: String) {
-    COPPER("Ámbar"),
-    CYAN("Cian"),
-    EMERALD("Esmeralda"),
-    CRIMSON("Carmesí"),
-    VIOLET("Violeta")
+enum class ThemePreset(
+    val label: String,
+    val primaryPreviewArgb: Long,
+    val secondaryPreviewArgb: Long,
+    val darkBgPreviewArgb: Long
+) {
+    COPPER_AMBER("Ámbar Cobre", 0xFFF5A623L, 0xFF38BDF8L, 0xFF0C0E13L),
+    LOSSLESS_CYAN("Cian Lossless", 0xFF38BDF8L, 0xFFF5A623L, 0xFF091118L),
+    EMERALD("Esmeralda", 0xFF10B981L, 0xFF34D399L, 0xFF091310L),
+    NEON_VIOLET("Violeta Neón", 0xFFA855F7L, 0xFF22D3EEL, 0xFF100C18L),
+    CRIMSON("Carmesí", 0xFFF43F5EL, 0xFFFB923CL, 0xFF150B0FL),
+    MONOCHROME("Monocromo", 0xFFE5E7EBL, 0xFF9CA3AFL, 0xFF0A0A0CL),
+    CUSTOM("Personalizado", 0xFFF5A623L, 0xFF38BDF8L, 0xFF0C0E13L)
 }
 
-enum class ArtworkStyle(val label: String) {
-    CARD("Tarjeta"),
-    VINYL("Vinilo")
+enum class CustomizableColorSlot(val label: String, val description: String) {
+    PRIMARY("Primario / Acento", "Botones principales, sliders y resaltado activo"),
+    SECONDARY("Secundario", "Etiquetas lossless, indicadores y acentos DSP"),
+    BACKGROUND("Fondo Principal", "Lienzo base de las pantallas principales"),
+    SURFACE("Tarjetas / Superficies", "Contenedores, listas y menús de opciones"),
+    TEXT("Texto Principal", "Tipografía principal (con contraste WCAG)")
 }
 
-enum class ListDensity(val label: String) {
-    COMFORTABLE("Cómoda"),
-    COMPACT("Compacta")
-}
+@Immutable
+data class CustomThemeColors(
+    val primaryArgb: Long = 0xFFF5A623L,
+    val secondaryArgb: Long = 0xFF38BDF8L,
+    val backgroundArgb: Long = 0xFF0C0E13L,
+    val surfaceArgb: Long = 0xFF14171FL,
+    val textArgb: Long? = null
+)
 
-data class UiPreferences(
-    val themeMode: ThemeMode = ThemeMode.OBSIDIAN,
-    val accentPalette: AccentPalette = AccentPalette.COPPER,
-    val artworkStyle: ArtworkStyle = ArtworkStyle.CARD,
-    val listDensity: ListDensity = ListDensity.COMFORTABLE,
-    val albumGridColumns: Int = 2,
-    val showFormatBadges: Boolean = true,
-    val ambientGlow: Boolean = true,
-    val animatedVisualizers: Boolean = true
+@Immutable
+data class AppearancePreferences(
+    val themeMode: AppThemeMode = AppThemeMode.DARK,
+    val preset: ThemePreset = ThemePreset.COPPER_AMBER,
+    val customColors: CustomThemeColors = CustomThemeColors(),
+    val dynamicArtworkColors: Boolean = true
 )
 

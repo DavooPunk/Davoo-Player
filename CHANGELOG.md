@@ -4,7 +4,30 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.5 (Actual — Compilación 10)
+## v2.0.6 (Actual — Compilación 11)
+
+### Compartir Letras y Fragmentos en Video 9:16 (`.mp4`) e Imagen (`.png`)
+- **Exportación nativa de video vertical (`720x1280`, 30 fps) con audio**: crea clips listos para Estados de WhatsApp, Telegram e Historias de Instagram directamente desde el botón de compartir integrado en la esquina superior derecha del visor inmersivo de letras (con soporte tanto para letras `.lrc` como para pistas sin letra sincronizada).
+- **Selección inteligente de versos y rango de audio**: elige de 1 a 6 líneas consecutivas en letras `.lrc` (aplicando el offset calibrado por canción, límite automático de 30 segundos y opción **Original** o **Bilingüe** si hay traducción) o selecciona un fragmento de 15s a 30s con visualizador de espectro animado para temas sin letra sincronizada.
+- **Vista previa en vivo y 3 estilos visuales**: escucha en bucle el fragmento seleccionado con animación en tiempo real (pausando y restaurando automáticamente el reproductor principal) y elige entre *Color dinámico de carátula*, *Oscuro ámbar (`CopperAmber`)* o *Carátula difuminada*, en formato **Video con Audio (`.mp4`)** o **Tarjeta Estática (`.png`)**.
+- **Motor nativo compatible con FLAC Hi-Res**: transcodificación directa con `MediaExtractor`, `MediaCodec` (`H.264` + `AAC 192 kbps`) y `MediaMuxer` sin librerías pesadas externas; convierte automáticamente audio de 24-bit/32-bit/float y frecuencias Hi-Res (`88.2 kHz`, `96 kHz`) a 16-bit y `44.1/48 kHz`, aplica `fade-in` (300 ms) y `fade-out` (500 ms), muestra progreso real cancelable y limpia la caché `shared_clips` antes de cada exportación.
+
+### Interludios Instrumentales, Pantalla Completa y Optimización
+- **Icono de nota musical en interludios instrumentales**: las introducciones largas (> 5s), pausas entre versos mayores a 8s y líneas vacías o de puntos (`...`) en letras sincronizadas muestran un icono limpio de nota musical (`♪`) interactivo con pulso sutil por GPU mientras suena.
+- **Menú *Acerca de, Legal y Cambios* a pantalla completa**: migrado a una vista inmersiva de pantalla completa con flecha de cierre en la esquina superior izquierda, evitando cierres accidentales al desplazarse.
+- **Avisos de actualización activos por defecto**: la comprobación ligera diaria de nuevas versiones en GitHub viene habilitada de fábrica (y sigue siendo configurable en *Opciones*).
+- **Rendimiento, estabilidad y menor uso de memoria**: modelos principales anotados como `@Immutable` para reducir recomposiciones en desplazamiento rápido, animaciones libres de relayouts y limpieza determinista de caché y recursos nativos.
+
+### Apariencia, Colores Manuales y Copias de Seguridad (`.json`)
+- **Tema Oscuro, Claro y Automático del sistema**: selector de 3 modos en *Opciones > Apariencia* (Oscuro por defecto, Claro de alto contraste y Automático según el sistema), con adaptación dinámica de los iconos de la barra de estado y navegación.
+- **Personalización total de colores**: 6 paletas predefinidas (*Ámbar Cobre*, *Cian Lossless*, *Esmeralda*, *Violeta Neón*, *Carmesí* y *Monocromo*) más editor manual interactivo (cuadro Saturación/Brillo, barra de Tono, muestras rápidas y entrada hexadecimal `#RRGGBB`) para personalizar primario, secundario, fondo, tarjetas y texto con verificación de contraste WCAG y restauración a valores por defecto.
+- **Control unificado de colores dinámicos de carátula**: al desactivar *"Usar colores dinámicos de la carátula"*, el reproductor, el mini reproductor flotante, el visor de letras y las tarjetas de compartir respetan estrictamente tu paleta personalizada.
+- **Copia de seguridad `.json` exportable e importable**: guarda y restaura listas, estadísticas de reproducción, historial, traducciones offline, ecualizador y preferencias de apariencia/tema desde *Opciones*.
+- **Menús más limpios y consistentes**: controles de Crossfade, Normalizar volumen y Gapless centralizados exclusivamente dentro de *Ecualizador y DSP*, y personalización visual centralizada en *Opciones > Apariencia*.
+
+---
+
+## v2.0.5 (Compilación 10)
 
 ### Visor de Letras Inmersivo y Navegación Libre (Estilo Spotify)
 - **Pantalla completa sin cierres accidentales**: reemplaza el contenedor deslizable por una vista inmersiva a pantalla completa con transición vertical suave, botón superior izquierdo de cierre explícito (`KeyboardArrowDown`) y título/artista centrados sobre el color dinámico de la carátula.

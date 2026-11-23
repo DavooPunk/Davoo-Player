@@ -8,12 +8,16 @@ import androidx.media3.common.Player
 import com.example.BuildConfig
 import com.example.ai.DeepLLyricsTranslator
 import com.example.ai.TranslationEngine
+import com.example.model.AppThemeMode
+import com.example.model.AppearancePreferences
 import com.example.model.AudioSettings
 import com.example.model.AudioTrack
+import com.example.model.CustomThemeColors
 import com.example.model.EqPreset
 import com.example.model.HeadphoneEqProfile
 import com.example.model.LastFmSession
 import com.example.model.SdCardFolder
+import com.example.model.ThemePreset
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -130,6 +134,18 @@ private data class PersistedTreeFolderDto(
     val addedAtMs: Long = 0L
 )
 
+@Serializable
+private data class AppearancePreferencesDto(
+    val themeModeName: String = AppThemeMode.DARK.name,
+    val presetName: String = ThemePreset.COPPER_AMBER.name,
+    val primaryArgb: Long = 0xFFF5A623L,
+    val secondaryArgb: Long = 0xFF38BDF8L,
+    val backgroundArgb: Long = 0xFF0C0E13L,
+    val surfaceArgb: Long = 0xFF14171FL,
+    val textArgb: Long? = null,
+    val dynamicArtworkColors: Boolean = true
+)
+
 class PlaybackPreferencesStore(context: Context) {
 
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -210,7 +226,7 @@ class PlaybackPreferencesStore(context: Context) {
         return updated
     }
 
-    private fun saveCustomEqProfiles(profiles: List<HeadphoneEqProfile>) {
+    fun saveCustomEqProfiles(profiles: List<HeadphoneEqProfile>) {
         val dtos = profiles.map {
             CustomEqProfileDto(
                 id = it.id,
@@ -221,6 +237,52 @@ class PlaybackPreferencesStore(context: Context) {
         }
         runCatching {
             prefs.edit().putString(KEY_CUSTOM_EQ_PROFILES, json.encodeToString(dtos)).apply()
+        }
+    }
+
+    fun loadAppearancePreferences(): AppearancePreferences {
+        val raw = prefs.getString(KEY_APPEARANCE_PREFS, null)
+        if (raw == null) {
+            return AppearancePreferences(
+                dynamicArtworkColors = loadAudioSettings().dynamicArtworkColors
+            )
+        }
+        return runCatching {
+            val dto = json.decodeFromString<AppearancePreferencesDto>(raw)
+            AppearancePreferences(
+                themeMode = AppThemeMode.entries.firstOrNull { it.name == dto.themeModeName } ?: AppThemeMode.DARK,
+                preset = ThemePreset.entries.firstOrNull { it.name == dto.presetName } ?: ThemePreset.COPPER_AMBER,
+                customColors = CustomThemeColors(
+                    primaryArgb = dto.primaryArgb,
+                    secondaryArgb = dto.secondaryArgb,
+                    backgroundArgb = dto.backgroundArgb,
+                    surfaceArgb = dto.surfaceArgb,
+                    textArgb = dto.textArgb
+                ),
+                dynamicArtworkColors = dto.dynamicArtworkColors
+            )
+        }.getOrDefault(
+            AppearancePreferences(dynamicArtworkColors = loadAudioSettings().dynamicArtworkColors)
+        )
+    }
+
+    fun saveAppearancePreferences(appearance: AppearancePreferences) {
+        val dto = AppearancePreferencesDto(
+            themeModeName = appearance.themeMode.name,
+            presetName = appearance.preset.name,
+            primaryArgb = appearance.customColors.primaryArgb,
+            secondaryArgb = appearance.customColors.secondaryArgb,
+            backgroundArgb = appearance.customColors.backgroundArgb,
+            surfaceArgb = appearance.customColors.surfaceArgb,
+            textArgb = appearance.customColors.textArgb,
+            dynamicArtworkColors = appearance.dynamicArtworkColors
+        )
+        runCatching {
+            prefs.edit().putString(KEY_APPEARANCE_PREFS, json.encodeToString(dto)).apply()
+            val currentAudio = loadAudioSettings()
+            if (currentAudio.dynamicArtworkColors != appearance.dynamicArtworkColors) {
+                saveAudioSettings(currentAudio.copy(dynamicArtworkColors = appearance.dynamicArtworkColors))
+            }
         }
     }
 
@@ -498,7 +560,7 @@ class PlaybackPreferencesStore(context: Context) {
         }
     }
 
-    fun isAutoUpdateCheckEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_UPDATE_CHECK, false)
+    fun isAutoUpdateCheckEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_UPDATE_CHECK, true)
 
     fun setAutoUpdateCheckEnabled(enabled: Boolean) {
         runCatching {
@@ -606,5 +668,6 @@ class PlaybackPreferencesStore(context: Context) {
         private const val KEY_LFM_AVATAR_URL = "lfm_avatar_url"
         private const val KEY_LFM_API_KEY = "lfm_api_key_override"
         private const val KEY_LFM_SHARED_SECRET = "lfm_shared_secret_override"
+        private const val KEY_APPEARANCE_PREFS = "appearance_preferences_json"
     }
 }

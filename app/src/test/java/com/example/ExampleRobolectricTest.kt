@@ -494,10 +494,15 @@ class ExampleRobolectricTest {
         """.trimIndent()
         val lyrics = com.example.data.repository.AudioTagParsers.parseLrcText(lrcRaw, "Test LRC")
         assertTrue(lyrics != null && lyrics.isSynced)
-        assertEquals(2, lyrics!!.lines.size)
-        assertEquals(12_500L, lyrics.lines[0].timestampMs)
-        assertEquals("First synced line", lyrics.lines[0].text)
-        assertEquals(65_000L, lyrics.lines[1].timestampMs)
+        val vocalLines = lyrics!!.lines.filter { !it.isInstrumental }
+        assertEquals(2, vocalLines.size)
+        assertEquals(12_500L, vocalLines[0].timestampMs)
+        assertEquals("First synced line", vocalLines[0].text)
+        assertEquals(65_000L, vocalLines[1].timestampMs)
+        // Intro (>5s) and interlude (>8s gap) instrumental markers are inserted automatically
+        assertTrue(lyrics.lines[0].isInstrumental)
+        assertEquals(0L, lyrics.lines[0].timestampMs)
+        assertTrue(lyrics.lines.any { it.isInstrumental && it.timestampMs == 12_500L + 3_500L })
 
         val cueRaw = """
             TRACK 01 AUDIO
@@ -863,8 +868,10 @@ class ExampleRobolectricTest {
             // Save .lrc from URI
             val saved = repository.loadAndSaveLyricsFromUri(track.id, Uri.fromFile(tempLrc))
             assertTrue(saved != null && saved.isSynced)
-            assertEquals(2, saved!!.lines.size)
-            assertEquals("Saved synced lyric line 1", saved.lines[0].text)
+            val savedVocal = saved!!.lines.filter { !it.isInstrumental }
+            assertEquals(2, savedVocal.size)
+            assertEquals("Saved synced lyric line 1", savedVocal[0].text)
+            assertTrue(saved.lines.any { it.isInstrumental && it.timestampMs == 0L })
 
             // Delete original source file to verify DB persistence is independent
             tempLrc.delete()
@@ -873,7 +880,8 @@ class ExampleRobolectricTest {
             val reloaded = repository.loadLyrics(track)
             assertTrue(reloaded != null && reloaded.isSynced)
             assertEquals(com.example.data.repository.AudioTagParsers.SAVED_LRC_SOURCE_LABEL, reloaded!!.sourceLabel)
-            assertEquals("Saved synced lyric line 2", reloaded.lines[1].text)
+            val reloadedVocal = reloaded.lines.filter { !it.isInstrumental }
+            assertEquals("Saved synced lyric line 2", reloadedVocal[1].text)
 
             // Clear saved lyrics -> DB entry deleted
             val cleared = repository.clearSavedLyrics(track)
@@ -1185,12 +1193,14 @@ class ExampleRobolectricTest {
         val saved = repository.saveDownloadedLyrics(track.id, candidates.first())
         assertTrue(saved != null && saved.isSynced)
         assertEquals(com.example.data.repository.AudioTagParsers.ONLINE_LRC_SOURCE_LABEL, saved!!.sourceLabel)
-        assertEquals("This ship is taking me far away", saved.lines[1].text)
+        val savedVocal = saved.lines.filter { !it.isInstrumental }
+        assertEquals("This ship is taking me far away", savedVocal[1].text)
 
         // Verify offline reload from Room
         val reloaded = repository.loadLyrics(track)
         assertTrue(reloaded != null && reloaded.isSynced)
-        assertEquals("Far away", reloaded!!.lines[0].text)
+        val reloadedVocal = reloaded!!.lines.filter { !it.isInstrumental }
+        assertEquals("Far away", reloadedVocal[0].text)
 
         // Verify Lyricsify URL builder
         val lyricsifyUrl = com.example.data.repository.LrcLibLyricsFetcher.buildLyricsifySearchUrl("Muse Starlight")
@@ -1764,10 +1774,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.5, v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.0.6, v2.0.5, v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.5").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.6").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.5").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.4").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.3").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.2").performScrollTo().assertIsDisplayed()
@@ -1977,11 +1988,12 @@ class ExampleRobolectricTest {
         assertNotNull(parsedBilingual)
         assertTrue(parsedBilingual!!.hasEmbeddedTranslation)
         assertTrue(parsedBilingual.sourceLabel.contains("Bilingüe"))
-        assertEquals(3, parsedBilingual.lines.size)
-        assertEquals("Hello from the dark", parsedBilingual.lines[0].text)
-        assertEquals("Hola desde la oscuridad", parsedBilingual.lines[0].secondaryText)
-        assertEquals(15_500L, parsedBilingual.lines[1].timestampMs)
-        assertEquals("Mantén el ritmo vivo", parsedBilingual.lines[1].secondaryText)
+        val bilingualVocal = parsedBilingual.lines.filter { !it.isInstrumental }
+        assertEquals(3, bilingualVocal.size)
+        assertEquals("Hello from the dark", bilingualVocal[0].text)
+        assertEquals("Hola desde la oscuridad", bilingualVocal[0].secondaryText)
+        assertEquals(15_500L, bilingualVocal[1].timestampMs)
+        assertEquals("Mantén el ritmo vivo", bilingualVocal[1].secondaryText)
 
         // Persist manual translation in Room via MusicRepository and restore it offline
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -3362,7 +3374,7 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `settingsScreen displays crossfade slider and active overlap label`() {
+    fun `settingsScreen omits duplicate crossfade replaygain and gapless controls`() {
         composeTestRule.setContent {
             SonoraTheme {
                 com.example.ui.screens.SettingsScreen(
@@ -3370,7 +3382,7 @@ class ExampleRobolectricTest {
                     isScanning = false,
                     excludedFoldersCount = 0,
                     sdCardFoldersCount = 0,
-                    audioSettings = com.example.model.AudioSettings(crossfadeSeconds = 6),
+                    audioSettings = com.example.model.AudioSettings(crossfadeSeconds = 6, replayGainEnabled = true, gaplessEnabled = true),
                     isSleepTimerActive = false,
                     preferredTranslationEngine = com.example.ai.TranslationEngine.GOOGLE,
                     onBack = {},
@@ -3393,9 +3405,32 @@ class ExampleRobolectricTest {
 
         composeTestRule.onNodeWithTag("settings_list")
             .performScrollToNode(hasTestTag("settings_engine_google"))
-        composeTestRule.onNodeWithTag("settings_crossfade_slider").performScrollTo().assertIsDisplayed()
-        composeTestRule.onNodeWithText("6 s").performScrollTo().assertIsDisplayed()
-        composeTestRule.onNodeWithText("Solapamiento suave de 6 s entre pistas").performScrollTo().assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag("settings_crossfade_slider").assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag("settings_replaygain_switch").assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag("settings_gapless_switch").assertCountEquals(0)
+    }
+
+    @Test
+    fun `equalizerAndDspSheet keeps crossfade replaygain gapless and omits dynamic_theme_switch`() {
+        val eqController = com.example.playback.AudioEffectsController()
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.EqualizerAndDspSheet(
+                    settings = com.example.model.AudioSettings(crossfadeSeconds = 6, replayGainEnabled = true, gaplessEnabled = true),
+                    bands = eqController.getBands(com.example.model.AudioSettings()),
+                    onUpdateSettings = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("replaygain_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("gapless_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("crossfade_slider").performScrollTo().assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag("dynamic_theme_switch").assertCountEquals(0)
     }
 
     @Test
@@ -3945,10 +3980,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("Reproductor local · Vistas previas transmitidas desde API pública").assertIsDisplayed()
         composeTestRule.onNodeWithTag("legal_dmca_card").assertTextContains("Deezer API", substring = true)
 
-        // Verify v2.0.5 (Actual) and v2.0.4 (Anterior) changelog entries omit Legal tab changes
+        // Verify v2.0.6 (Actual), v2.0.5 and v2.0.4 (Anterior) changelog entries omit Legal tab changes
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Visor de letras inmersivo", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Compartir letras y fragmentos en Video 9:16", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Visor de letras inmersivo", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Crossfade real entre canciones", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Ir a la canción actual y cola reorganizada", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Eliminación física real de canciones del dispositivo", substring = true).performScrollTo().assertIsDisplayed()
@@ -4634,5 +4670,859 @@ class ExampleRobolectricTest {
         } finally {
             controller.destroy()
         }
+    }
+
+    @Test
+    fun `lyricsShareClipCalculator enforces 1 to 6 lines offsetMs next line endMs EOF fallback and 30s cap`() {
+        val lyrics = com.example.model.LyricsData(
+            lines = (0 until 8).map { idx ->
+                com.example.model.LyricLine(
+                    timestampMs = 10_000L + idx * 4_500L,
+                    text = "Verso número $idx",
+                    secondaryText = "Line number $idx"
+                )
+            },
+            isSynced = true,
+            sourceLabel = "Archivo .lrc local",
+            hasEmbeddedTranslation = true,
+            offsetMs = 500L
+        )
+
+        // Single line at index 1: raw 14500 - 500 = 14000, end = next line (19000 - 500 = 18500)
+        val singleWindow = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
+            lyrics = lyrics,
+            translatedLyrics = null,
+            selectedRange = 1..1,
+            trackDurationMs = 180_000L,
+            includeTranslation = true
+        )
+        assertEquals(14_000L, singleWindow.startMs)
+        assertEquals(18_500L, singleWindow.endMs)
+        assertEquals(1, singleWindow.verses.size)
+        assertEquals("Line number 1", singleWindow.verses.first().secondaryText)
+
+        // Selecting 6 consecutive lines (0..5) spans 9500 -> next line 6 (37000 - 500 = 36500) -> 27s (< 30s)
+        var range = 0..0
+        range = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 5, lyrics, 180_000L)
+        assertEquals(0..5, range)
+
+        // Attempting to add line 6 (7th line) exceeds MAX_SELECTED_LINES=6 -> resets cleanly to 6..6
+        val seventh = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 6, lyrics, 180_000L)
+        assertEquals(6..6, seventh)
+
+        // Last line EOF fallback: minOf(trackDuration, lastLineStart + 5000L)
+        val eofWindow = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
+            lyrics = lyrics,
+            translatedLyrics = null,
+            selectedRange = 7..7,
+            trackDurationMs = 43_000L, // lastLineStart = 41500 - 500 = 41000; +5000 = 46000 -> clamped to 43000
+            includeTranslation = false
+        )
+        assertEquals(41_000L, eofWindow.startMs)
+        assertEquals(43_000L, eofWindow.endMs)
+
+        // Long verse span clamped cleanly to 30_000L max
+        val longLyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(5_000L, "Long verse"),
+                com.example.model.LyricLine(50_000L, "Next verse")
+            ),
+            isSynced = true,
+            sourceLabel = "Local"
+        )
+        val capped = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
+            lyrics = longLyrics,
+            translatedLyrics = null,
+            selectedRange = 0..0,
+            trackDurationMs = 120_000L,
+            includeTranslation = false
+        )
+        assertEquals(5_000L, capped.startMs)
+        assertEquals(35_000L, capped.endMs)
+        assertTrue(capped.wasClampedTo30s)
+
+        // Unsynced range clamped strictly to 15s..30s within track duration
+        val unsynced = com.example.share.LyricsShareClipCalculator.computeUnsyncedWindow(
+            requestedStartMs = 95_000L,
+            requestedDurationMs = 25_000L,
+            trackDurationMs = 100_000L
+        )
+        assertEquals(75_000L, unsynced.startMs)
+        assertEquals(100_000L, unsynced.endMs)
+        assertEquals(25_000L, unsynced.durationMs)
+    }
+
+    @Test
+    fun `hiResAudioProcessor normalizes 24bit 32bit float PCM resamples 96kHz and applies fades`() {
+        // 24-bit packed little-endian: +0x400000 (~0.5 FS -> +16384 in 16-bit) and -0x400000 (-16384)
+        val bytes24 = byteArrayOf(
+            0x00, 0x00, 0x40,
+            0x00, 0x00, 0xC0.toByte()
+        )
+        val decoded24 = com.example.share.LyricsShareAudioProcessor.decodePcmBytesToShorts(
+            bytes24,
+            com.example.share.LyricsShareAudioProcessor.PCM_ENCODING_24BIT_PACKED
+        )
+        assertEquals(2, decoded24.size)
+        assertEquals(16_384, decoded24[0].toInt())
+        assertEquals(-16_384, decoded24[1].toInt())
+
+        // 32-bit float PCM: +0.5f and -1.0f
+        val floatBuf = java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .putFloat(0.5f)
+            .putFloat(-1.0f)
+        val decodedFloat = com.example.share.LyricsShareAudioProcessor.decodePcmBytesToShorts(
+            floatBuf.array(),
+            com.example.share.LyricsShareAudioProcessor.PCM_ENCODING_FLOAT
+        )
+        assertEquals(16_384, decodedFloat[0].toInt())
+        assertEquals(-32_767, decodedFloat[1].toInt())
+
+        // Hi-Res sample rate selection for AAC encoder compatibility
+        assertEquals(48_000, com.example.share.LyricsShareAudioProcessor.selectTargetAacSampleRate(96_000))
+        assertEquals(44_100, com.example.share.LyricsShareAudioProcessor.selectTargetAacSampleRate(88_200))
+        assertEquals(44_100, com.example.share.LyricsShareAudioProcessor.selectTargetAacSampleRate(44_100))
+
+        // Downsample 2 seconds of stereo 96kHz -> 48kHz
+        val stereo96k = ShortArray(96_000 * 2 * 2) { 20_000 }
+        val resampled48k = com.example.share.LyricsShareAudioProcessor.linearResample(
+            samples = stereo96k,
+            channels = 2,
+            srcSampleRate = 96_000,
+            dstSampleRate = 48_000
+        )
+        assertEquals(48_000 * 2 * 2, resampled48k.size)
+
+        // Apply 300ms fade-in & 500ms fade-out
+        com.example.share.LyricsShareAudioProcessor.applyFadeInOut(
+            samples = resampled48k,
+            sampleRate = 48_000,
+            channels = 2,
+            fadeInMs = 300,
+            fadeOutMs = 500
+        )
+        assertEquals(0, resampled48k[0].toInt())
+        assertTrue(kotlin.math.abs(resampled48k[resampled48k.size / 2].toInt()) > 19_000)
+        assertEquals(0, resampled48k[resampled48k.lastIndex].toInt())
+    }
+
+    @Test
+    fun `exportStaticPngCard cleans shared_clips cache renders blurred style and resolves FileProvider uri`() = kotlinx.coroutines.test.runTest {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val cacheDir = com.example.share.LyricsVideoExporter.getSharedClipsCacheDir(context)
+        val staleFile = java.io.File(cacheDir, "stale_clip.mp4").apply { writeText("old") }
+        assertTrue(staleFile.exists())
+
+        // Create temporary local cover art PNG so BLURRED_ARTWORK style executes full blur pipeline too
+        val artBitmap = android.graphics.Bitmap.createBitmap(120, 120, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            eraseColor(android.graphics.Color.rgb(217, 138, 58))
+        }
+        val artFile = java.io.File(context.cacheDir, "test_cover_share.png")
+        java.io.FileOutputStream(artFile).use {
+            artBitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        artBitmap.recycle()
+
+        val track = AudioTrack(
+            id = "png_share_track",
+            contentUri = "",
+            title = "Lossless Echoes",
+            artist = "DavooPunk",
+            album = "Sessions",
+            albumId = 1L,
+            albumArtUri = Uri.fromFile(artFile).toString(),
+            durationMs = 210_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 32_000_000L,
+            dateAddedSec = 700L,
+            folderName = "Music"
+        )
+        val spec = com.example.share.LyricsShareClipSpec(
+            track = track,
+            startMs = 12_000L,
+            endMs = 26_000L,
+            isSyncedLyrics = true,
+            verses = listOf(
+                com.example.share.ShareLyricVerse(12_000L, 19_000L, "Primera línea luminosa", "First glowing line"),
+                com.example.share.ShareLyricVerse(19_000L, 26_000L, "Segunda línea sincronizada", "Second synced line")
+            ),
+            includeTranslation = true,
+            style = com.example.share.ShareCardStyle.BLURRED_ARTWORK,
+            format = com.example.share.ShareOutputFormat.IMAGE_PNG
+        )
+
+        val ready = com.example.share.LyricsVideoExporter.exportClip(
+            context = context,
+            spec = spec,
+            onProgress = { _, _ -> }
+        )
+
+        assertFalse(staleFile.exists())
+        assertEquals("image/png", ready.mimeType)
+        assertTrue(ready.uri.toString().contains("${context.packageName}.fileprovider"))
+        assertTrue(ready.uri.toString().contains("shared_clips"))
+        val exportedFile = java.io.File(cacheDir, ready.fileName)
+        assertTrue(exportedFile.exists() && exportedFile.length() > 1000L)
+        artFile.delete()
+    }
+
+    @Test
+    fun `lyricsBottomSheet displays share entry point and passes bilingual flag`() {
+        val track = AudioTrack(
+            id = "entry_track_lyrics",
+            contentUri = "content://media/external/audio/media/901",
+            title = "Midnight Vinyl",
+            artist = "DavooPunk",
+            album = "Late Night",
+            albumId = 90L,
+            albumArtUri = null,
+            durationMs = 195_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 25_000_000L,
+            dateAddedSec = 710L,
+            folderName = "Music"
+        )
+        val lyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(2_000L, "Primer verso", "First verse"),
+                com.example.model.LyricLine(8_000L, "Segundo verso", "Second verse")
+            ),
+            isSynced = true,
+            sourceLabel = "Archivo .lrc local",
+            hasEmbeddedTranslation = true
+        )
+
+        var sharedFromLyrics: Boolean? = null
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 3_000L,
+                    onSeekTo = {},
+                    onPickLrcFile = {},
+                    onDismiss = {},
+                    onShareSnippet = { includeTrans -> sharedFromLyrics = includeTrans }
+                )
+            }
+        }
+        composeTestRule.onNodeWithTag("lyrics_share_button").assertIsDisplayed().performClick()
+        assertEquals(true, sharedFromLyrics)
+    }
+
+    @Test
+    @Config(sdk = [36], qualifiers = "w390dp-h780dp")
+    fun `nowPlayingScreen omits share action chip so share stays exclusively inside lyrics viewer`() {
+        val track = AudioTrack(
+            id = "entry_track_player",
+            contentUri = "content://media/external/audio/media/902",
+            title = "Midnight Vinyl",
+            artist = "DavooPunk",
+            album = "Late Night",
+            albumId = 90L,
+            albumArtUri = null,
+            durationMs = 195_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 25_000_000L,
+            dateAddedSec = 710L,
+            folderName = "Music"
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.screens.NowPlayingScreen(
+                    playbackState = com.example.playback.PlaybackUiState(
+                        currentTrack = track,
+                        queue = listOf(track),
+                        currentIndex = 0,
+                        isPlaying = false,
+                        positionMs = 10_000L,
+                        durationMs = track.durationMs
+                    ),
+                    onCollapse = {},
+                    onTogglePlayPause = {},
+                    onSeekTo = {},
+                    onSkipPrevious = {},
+                    onSkipNext = {},
+                    onToggleShuffle = {},
+                    onCycleRepeat = {},
+                    onOpenQueue = {},
+                    onAddToPlaylist = {}
+                )
+            }
+        }
+        composeTestRule.onNodeWithTag("now_playing_lyrics_button").assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag("now_playing_share_button").assertCountEquals(0)
+    }
+
+    @Test
+    fun `lyricsShareSheet switches synced bilingual styles formats and displays unsynced 15s_30s selector`() {
+        val track = AudioTrack(
+            id = "share_sheet_track",
+            contentUri = "",
+            title = "Neon Tape",
+            artist = "DavooPunk",
+            album = "Retro",
+            albumId = 91L,
+            albumArtUri = null,
+            durationMs = 200_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 6_000_000L,
+            dateAddedSec = 720L,
+            folderName = "Music"
+        )
+        val syncedLyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(5_000L, "Bajo luces de neón", "Under neon lights"),
+                com.example.model.LyricLine(10_000L, "Suena el sintetizador", "The synth plays on"),
+                com.example.model.LyricLine(16_000L, "Hasta el amanecer", "Until the sunrise")
+            ),
+            isSynced = true,
+            sourceLabel = "Local",
+            hasEmbeddedTranslation = true
+        )
+
+        var capturedSpec: com.example.share.LyricsShareClipSpec? = null
+        val showSynced = androidx.compose.runtime.mutableStateOf(true)
+        val exportState = androidx.compose.runtime.mutableStateOf<com.example.share.ShareExportUiState>(
+            com.example.share.ShareExportUiState.Idle
+        )
+        var cancelledCount = 0
+
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsShareSheet(
+                    track = track,
+                    lyrics = if (showSynced.value) syncedLyrics else null,
+                    translatedLyrics = null,
+                    initialPositionMs = 5_000L,
+                    initialIncludeTranslation = true,
+                    exportState = exportState.value,
+                    onStartExport = { capturedSpec = it },
+                    onCancelExport = { cancelledCount++ },
+                    onExportReady = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("lyrics_share_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("share_style_amber"))
+        composeTestRule.onNodeWithTag("share_style_amber").performClick()
+        composeTestRule.onNodeWithTag("share_format_png").performClick()
+        composeTestRule.onNodeWithTag("share_lang_bilingual").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("share_export_button").performClick()
+
+        assertNotNull(capturedSpec)
+        assertEquals(com.example.share.ShareCardStyle.COPPER_AMBER_DARK, capturedSpec?.style)
+        assertEquals(com.example.share.ShareOutputFormat.IMAGE_PNG, capturedSpec?.format)
+        assertEquals(true, capturedSpec?.isSyncedLyrics)
+        assertEquals(true, capturedSpec?.includeTranslation)
+
+        // Verify export progress overlay + cancel
+        exportState.value = com.example.share.ShareExportUiState.Exporting(0.6f, "Renderizando video…")
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("share_export_progress_overlay").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("share_cancel_export_button").performClick()
+        assertEquals(1, cancelledCount)
+
+        // Switch to unsynced mode (no lyrics) -> 15s-30s range selector appears
+        exportState.value = com.example.share.ShareExportUiState.Idle
+        showSynced.value = false
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("unsynced_range_selector_card"))
+        composeTestRule.onNodeWithTag("unsynced_range_selector_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("share_unsynced_dur_30s"))
+        composeTestRule.onNodeWithTag("share_unsynced_dur_30s").performClick()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("share_format_mp4"))
+        composeTestRule.onNodeWithTag("share_format_mp4").performClick()
+        composeTestRule.onNodeWithTag("share_export_button").performClick()
+        assertEquals(false, capturedSpec?.isSyncedLyrics)
+        assertEquals(com.example.share.ShareOutputFormat.VIDEO_MP4, capturedSpec?.format)
+        assertEquals(30_000L, capturedSpec?.clipDurationMs)
+    }
+
+    @Test
+    fun `playbackPreferencesStore defaults autoUpdateCheckEnabled to true and persists opt out`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = com.example.data.local.PlaybackPreferencesStore(context)
+        assertTrue(store.isAutoUpdateCheckEnabled())
+
+        store.setAutoUpdateCheckEnabled(false)
+        assertFalse(store.isAutoUpdateCheckEnabled())
+
+        store.setAutoUpdateCheckEnabled(true)
+        assertTrue(store.isAutoUpdateCheckEnabled())
+    }
+
+    @Test
+    fun `audioTagParsers inserts instrumental markers for empty dot lines intro over 5s and gaps over 8s`() {
+        val raw = """
+            [00:08.00]First verse
+            [00:12.00]...
+            [00:15.00]
+            [00:18.00]Second verse
+            [00:30.00]Bridge after long pause
+            [00:35.00]Closing line
+        """.trimIndent()
+
+        val parsed = com.example.data.repository.AudioTagParsers.parseLrcText(raw, "Test LRC")
+        assertNotNull(parsed)
+        val lines = parsed!!.lines
+
+        // Index 0: synthetic intro at 0ms because first line > 5,000ms
+        assertTrue(lines[0].isInstrumental)
+        assertEquals(0L, lines[0].timestampMs)
+
+        // Index 1: First verse at 8,000ms
+        assertFalse(lines[1].isInstrumental)
+        assertEquals("First verse", lines[1].text)
+        assertEquals(8_000L, lines[1].timestampMs)
+
+        // Index 2 & 3: Explicit "..." and empty timestamp lines -> instrumental
+        assertTrue(lines[2].isInstrumental)
+        assertEquals(12_000L, lines[2].timestampMs)
+        assertTrue(lines[3].isInstrumental)
+        assertEquals(15_000L, lines[3].timestampMs)
+
+        // Index 4: Second verse at 18,000ms
+        assertFalse(lines[4].isInstrumental)
+        assertEquals("Second verse", lines[4].text)
+        assertEquals(18_000L, lines[4].timestampMs)
+
+        // Index 5: Synthetic interlude at 18,000 + 3,500 = 21,500ms due to 12s gap (>8s)
+        assertTrue(lines[5].isInstrumental)
+        assertEquals(21_500L, lines[5].timestampMs)
+
+        // Index 6 & 7: Bridge (30,000ms) -> Closing line (35,000ms, gap 5s <= 8s, no interlude)
+        assertFalse(lines[6].isInstrumental)
+        assertEquals("Bridge after long pause", lines[6].text)
+        assertFalse(lines[7].isInstrumental)
+        assertEquals("Closing line", lines[7].text)
+        assertEquals(8, lines.size)
+
+        // LRC export skips instrumental lines cleanly
+        val exported = com.example.data.repository.AudioTagParsers.exportLyricsToLrc(
+            trackTitle = "Instrumental Song",
+            trackArtist = "Davoo",
+            trackAlbum = "Orbit",
+            lyrics = parsed
+        )
+        assertTrue(exported.contains("[00:08.00]First verse"))
+        assertFalse(exported.contains("[00:00.00]"))
+        assertFalse(exported.contains("[00:21.50]"))
+    }
+
+    @Test
+    fun `lyricsBottomSheet renders instrumental MusicNote indicator and seeks when tapped`() {
+        val track = AudioTrack(
+            id = "instr_track",
+            contentUri = "content://media/external/audio/media/950",
+            title = "Ambient Pulse",
+            artist = "DavooPunk",
+            album = "Echoes",
+            albumId = 95L,
+            albumArtUri = null,
+            durationMs = 210_000L,
+            format = AudioFormat.FLAC,
+            mimeType = "audio/flac",
+            sizeBytes = 24_000_000L,
+            dateAddedSec = 800L,
+            folderName = "Music"
+        )
+        val lyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(0L, "", isInstrumental = true),
+                com.example.model.LyricLine(8_000L, "First sung line"),
+                com.example.model.LyricLine(11_500L, "", isInstrumental = true),
+                com.example.model.LyricLine(22_000L, "After solo")
+            ),
+            isSynced = true,
+            sourceLabel = "Local .lrc"
+        )
+
+        var soughtMs: Long? = null
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 12_000L,
+                    isPlaying = true,
+                    onSeekTo = { soughtMs = it },
+                    onPickLrcFile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("lyrics_instrumental_note_0").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_instrumental_note_2")
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(11_500L, soughtMs)
+    }
+
+    @Test
+    fun `creditsBottomSheet displays top left KeyboardArrowDown dismiss button in full screen dialog`() {
+        var dismissed = false
+        composeTestRule.setContent {
+            SonoraTheme {
+                com.example.ui.components.CreditsBottomSheet(onDismiss = { dismissed = true })
+            }
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("credits_bottom_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("close_credits_button").assertIsDisplayed().performClick()
+        assertTrue(dismissed)
+    }
+
+    @Test
+    fun `appearance preferences persist in PlaybackPreferencesStore and ThemePalette resolves modes and WCAG contrast`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+
+        val defaultPrefs = prefs.loadAppearancePreferences()
+        assertEquals(com.example.model.AppThemeMode.DARK, defaultPrefs.themeMode)
+        assertEquals(com.example.model.ThemePreset.COPPER_AMBER, defaultPrefs.preset)
+        assertTrue(defaultPrefs.dynamicArtworkColors)
+
+        val custom = com.example.model.AppearancePreferences(
+            themeMode = com.example.model.AppThemeMode.LIGHT,
+            preset = com.example.model.ThemePreset.CUSTOM,
+            customColors = com.example.model.CustomThemeColors(
+                primaryArgb = 0xFF0E7490L,
+                secondaryArgb = 0xFFD97706L,
+                backgroundArgb = 0xFFF8F7F4L,
+                surfaceArgb = 0xFFFFFFFFL,
+                textArgb = null
+            ),
+            dynamicArtworkColors = false
+        )
+        prefs.saveAppearancePreferences(custom)
+
+        val reloaded = prefs.loadAppearancePreferences()
+        assertEquals(com.example.model.AppThemeMode.LIGHT, reloaded.themeMode)
+        assertEquals(com.example.model.ThemePreset.CUSTOM, reloaded.preset)
+        assertEquals(0xFF0E7490L, reloaded.customColors.primaryArgb)
+        assertEquals(0xFFF8F7F4L, reloaded.customColors.backgroundArgb)
+        assertFalse(reloaded.dynamicArtworkColors)
+        assertFalse(prefs.loadAudioSettings().dynamicArtworkColors)
+
+        val lightPalette = com.example.ui.theme.ThemePalette.resolve(reloaded, isSystemDark = true)
+        assertFalse(lightPalette.isDark)
+        assertTrue(
+            com.example.ui.theme.ThemePalette.wcagContrastRatio(
+                lightPalette.primaryText,
+                lightPalette.background
+            ) >= 4.5f
+        )
+
+        val systemDarkPalette = com.example.ui.theme.ThemePalette.resolve(
+            com.example.model.AppearancePreferences(
+                themeMode = com.example.model.AppThemeMode.SYSTEM,
+                preset = com.example.model.ThemePreset.COPPER_AMBER
+            ),
+            isSystemDark = true
+        )
+        assertTrue(systemDarkPalette.isDark)
+        val systemLightPalette = com.example.ui.theme.ThemePalette.resolve(
+            com.example.model.AppearancePreferences(
+                themeMode = com.example.model.AppThemeMode.SYSTEM,
+                preset = com.example.model.ThemePreset.COPPER_AMBER
+            ),
+            isSystemDark = false
+        )
+        assertFalse(systemLightPalette.isDark)
+
+        assertEquals(0xFF10B981L, com.example.ui.theme.ThemePalette.hexStringToArgb("#10B981"))
+        assertEquals("#10B981", com.example.ui.theme.ThemePalette.argbToHexString(0xFF10B981L))
+    }
+
+    @Test
+    fun `settingsScreen displays theme mode selector customize colors dynamic toggle and backup controls`() {
+        var selectedMode = com.example.model.AppThemeMode.DARK
+        var openedCustomization = false
+        var exportedClicked = false
+        var importedClicked = false
+        val appearanceState = androidx.compose.runtime.mutableStateOf(
+            com.example.model.AppearancePreferences(themeMode = com.example.model.AppThemeMode.DARK)
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme(appearance = appearanceState.value) {
+                com.example.ui.screens.SettingsScreen(
+                    totalTracksCount = 120,
+                    isScanning = false,
+                    excludedFoldersCount = 1,
+                    sdCardFoldersCount = 0,
+                    audioSettings = com.example.model.AudioSettings(),
+                    isSleepTimerActive = false,
+                    preferredTranslationEngine = com.example.ai.TranslationEngine.GOOGLE,
+                    onBack = {},
+                    onRefreshLibrary = {},
+                    onImportFiles = {},
+                    onOpenFoldersManager = {},
+                    onAddSdCardFolder = {},
+                    onOpenEqualizer = {},
+                    onOpenSleepTimer = {},
+                    onUpdateAudioSettings = {},
+                    onSelectTranslationEngine = {},
+                    onOpenAboutAndLegal = {},
+                    bottomContentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    appearancePreferences = appearanceState.value,
+                    onSelectThemeMode = { mode ->
+                        selectedMode = mode
+                        appearanceState.value = appearanceState.value.copy(themeMode = mode)
+                    },
+                    onOpenAppearanceCustomization = { openedCustomization = true },
+                    onToggleDynamicArtworkColors = { enabled ->
+                        appearanceState.value = appearanceState.value.copy(dynamicArtworkColors = enabled)
+                    },
+                    onExportBackup = { exportedClicked = true },
+                    onImportBackup = { importedClicked = true }
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_theme_mode_light"))
+        composeTestRule.onNodeWithTag("settings_theme_mode_dark").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_theme_mode_light").performClick()
+        assertEquals(com.example.model.AppThemeMode.LIGHT, selectedMode)
+        composeTestRule.onNodeWithTag("settings_theme_mode_system").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_customize_colors_row"))
+        composeTestRule.onNodeWithTag("settings_customize_colors_row").performClick()
+        assertTrue(openedCustomization)
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_dynamic_colors_switch"))
+        composeTestRule.onNodeWithTag("settings_dynamic_colors_switch").performClick()
+        assertFalse(appearanceState.value.dynamicArtworkColors)
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_export_backup_row"))
+        composeTestRule.onNodeWithTag("settings_export_backup_row").performClick()
+        assertTrue(exportedClicked)
+
+        composeTestRule.onNodeWithTag("settings_list")
+            .performScrollToNode(hasTestTag("settings_import_backup_row"))
+        composeTestRule.onNodeWithTag("settings_import_backup_row").performClick()
+        assertTrue(importedClicked)
+    }
+
+    @Test
+    fun `appearanceCustomizationSheet selects presets edits hex color and resets defaults`() {
+        val appearanceState = androidx.compose.runtime.mutableStateOf(
+            com.example.model.AppearancePreferences()
+        )
+        var resetTriggered = false
+
+        composeTestRule.setContent {
+            SonoraTheme(appearance = appearanceState.value) {
+                com.example.ui.components.AppearanceCustomizationSheet(
+                    appearance = appearanceState.value,
+                    onUpdateAppearance = { appearanceState.value = it },
+                    onSelectPreset = { preset ->
+                        appearanceState.value = appearanceState.value.copy(
+                            preset = preset,
+                            customColors = com.example.ui.theme.ThemePalette.seedCustomColorsFromPreset(preset, isDark = true)
+                        )
+                    },
+                    onResetToDefaults = {
+                        resetTriggered = true
+                        appearanceState.value = com.example.model.AppearancePreferences()
+                    },
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("appearance_customization_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("theme_presets_row").performScrollTo()
+        composeTestRule.onNodeWithTag("theme_presets_row")
+            .performScrollToNode(hasTestTag("theme_preset_emerald"))
+        composeTestRule.onNodeWithTag("theme_preset_emerald").performClick()
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.model.ThemePreset.EMERALD, appearanceState.value.preset)
+
+        composeTestRule.onNodeWithTag("color_slots_row").performScrollTo()
+        composeTestRule.onNodeWithTag("color_slot_primary").performClick()
+        composeTestRule.onNodeWithTag("color_picker_sv_box").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("color_picker_hue_bar").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("color_picker_hex_input").performScrollTo().performTextReplacement("#FF3366")
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        assertEquals(com.example.model.ThemePreset.CUSTOM, appearanceState.value.preset)
+        assertEquals(0xFFFF3366L, appearanceState.value.customColors.primaryArgb)
+
+        composeTestRule.onNodeWithTag("color_slots_row").performScrollTo()
+        composeTestRule.onNodeWithTag("color_slot_text").performClick()
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("text_color_auto_wcag_chip").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("text_wcag_ratio_badge").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("appearance_reset_defaults_button").performScrollTo().performClick()
+        composeTestRule.waitForIdle()
+        assertTrue(resetTriggered)
+        assertEquals(com.example.model.ThemePreset.COPPER_AMBER, appearanceState.value.preset)
+    }
+
+    @Test
+    fun `sonoraBackupManager exports and imports json restoring appearance playlists stats and audio settings`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = com.example.data.local.PlaybackPreferencesStore(context)
+
+        val customAppearance = com.example.model.AppearancePreferences(
+            themeMode = com.example.model.AppThemeMode.LIGHT,
+            preset = com.example.model.ThemePreset.CUSTOM,
+            customColors = com.example.model.CustomThemeColors(
+                primaryArgb = 0xFF7C3AEDL,
+                secondaryArgb = 0xFF059669L,
+                backgroundArgb = 0xFFF9FAFBL,
+                surfaceArgb = 0xFFFFFFFFL,
+                textArgb = 0xFF111827L
+            ),
+            dynamicArtworkColors = false
+        )
+        prefs.saveAppearancePreferences(customAppearance)
+        prefs.saveAudioSettings(
+            com.example.model.AudioSettings(
+                crossfadeSeconds = 7,
+                replayGainEnabled = true,
+                eqEnabled = true,
+                preampDb = -2.5f,
+                dynamicArtworkColors = false
+            )
+        )
+        val playlistId = db.playlistDao().insertPlaylist(
+            com.example.data.local.PlaylistEntity(name = "Respaldo Hi-Res", description = "Favoritas")
+        )
+        db.playlistDao().insertPlaylistTrack(
+            com.example.data.local.PlaylistTrackEntity(
+                playlistId = playlistId,
+                trackId = "track_backup_1",
+                contentUri = "content://media/external/audio/media/501",
+                title = "Midnight Vinyl",
+                artist = "Davoo",
+                album = "Side A",
+                albumId = 501L,
+                albumArtUri = null,
+                durationMs = 240_000L,
+                formatName = AudioFormat.FLAC.name,
+                mimeType = "audio/flac",
+                sizeBytes = 24_000_000L,
+                folderName = "Music",
+                isSafImported = false,
+                position = 0
+            )
+        )
+        db.trackStatsDao().upsert(
+            com.example.data.local.TrackStatsEntity(
+                trackId = "track_backup_1",
+                isFavorite = true,
+                playCount = 14,
+                lastPlayedAt = 99999L
+            )
+        )
+
+        val manager = com.example.data.local.SonoraBackupManager(context, db, prefs)
+        val exportedJson = manager.buildBackupJson()
+        assertTrue(exportedJson.contains("Respaldo Hi-Res"))
+        assertTrue(exportedJson.contains("LIGHT"))
+
+        // Clear local state before restore
+        prefs.saveAppearancePreferences(com.example.model.AppearancePreferences())
+        prefs.saveAudioSettings(com.example.model.AudioSettings())
+        db.clearAllTables()
+
+        val result = manager.importFromJsonString(exportedJson)
+        assertEquals(1, result.playlistsRestored)
+        assertEquals(1, result.trackStatsRestored)
+        assertEquals(com.example.model.AppThemeMode.LIGHT, result.appearance.themeMode)
+        assertEquals(com.example.model.ThemePreset.CUSTOM, result.appearance.preset)
+        assertEquals(0xFF7C3AEDL, result.appearance.customColors.primaryArgb)
+        assertFalse(result.appearance.dynamicArtworkColors)
+        assertEquals(7, result.audioSettings.crossfadeSeconds)
+        assertTrue(result.audioSettings.replayGainEnabled)
+
+        val restoredPlaylists = db.playlistDao().getAllPlaylistsWithEntriesOnce()
+        assertEquals(1, restoredPlaylists.size)
+        assertEquals("Respaldo Hi-Res", restoredPlaylists.first().playlist.name)
+        assertEquals("Midnight Vinyl", restoredPlaylists.first().entries.first().title)
+    }
+
+    @Test
+    fun `lyricsBottomSheet respects disabled dynamicArtworkColors without using artwork tint`() {
+        val track = AudioTrack(
+            id = "lyr_static_theme_99",
+            contentUri = "content://media/external/audio/media/999",
+            title = "Static Palette Song",
+            artist = "Davoo",
+            album = "Clean Light",
+            albumId = 99L,
+            albumArtUri = null,
+            durationMs = 180_000L,
+            format = AudioFormat.MP3,
+            mimeType = "audio/mpeg",
+            sizeBytes = 3_200_000L,
+            dateAddedSec = 300L,
+            folderName = "Music"
+        )
+        val lyrics = com.example.model.LyricsData(
+            lines = listOf(com.example.model.LyricLine(0L, "Line rendered with user theme")),
+            isSynced = true,
+            sourceLabel = "Local .lrc"
+        )
+        val lightAppearance = com.example.model.AppearancePreferences(
+            themeMode = com.example.model.AppThemeMode.LIGHT,
+            preset = com.example.model.ThemePreset.EMERALD,
+            dynamicArtworkColors = false
+        )
+
+        composeTestRule.setContent {
+            SonoraTheme(appearance = lightAppearance) {
+                com.example.ui.components.LyricsBottomSheet(
+                    track = track,
+                    lyrics = lyrics,
+                    isLoading = false,
+                    positionMs = 1_000L,
+                    isPlaying = true,
+                    dynamicArtworkColorsEnabled = false,
+                    dynamicAccentColor = androidx.compose.ui.graphics.Color(0xFFE91E63),
+                    onSeekTo = {},
+                    onTogglePlayPause = {},
+                    onPickLrcFile = {},
+                    onDismiss = {}
+                )
+            }
+        }
+
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("lyrics_bottom_sheet").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Line rendered with user theme").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("lyrics_play_pause_button").assertIsDisplayed()
     }
 }

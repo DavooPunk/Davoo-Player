@@ -3,6 +3,11 @@ package com.example.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -47,6 +52,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.material.icons.rounded.OpenInBrowser
@@ -102,6 +108,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -128,8 +135,7 @@ import com.example.model.SdCardFolder
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.playback.PlaybackPositionState
 import com.example.ui.theme.ArtworkColorExtractor
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
+import com.example.ui.theme.ThemePalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -164,7 +170,8 @@ fun LyricsBottomSheet(
     onResetOffset: (() -> Unit)? = null,
     onExportSaveLrc: ((includeTranslation: Boolean) -> Unit)? = null,
     onExportShareLrc: ((includeTranslation: Boolean) -> Unit)? = null,
-    livePositionFlow: StateFlow<PlaybackPositionState>? = null
+    livePositionFlow: StateFlow<PlaybackPositionState>? = null,
+    onShareSnippet: ((includeTranslation: Boolean) -> Unit)? = null
 ) {
     BackHandler(onBack = onDismiss)
 
@@ -173,10 +180,10 @@ fun LyricsBottomSheet(
     val coroutineScope = rememberCoroutineScope()
 
     val isLossless = track.format == AudioFormat.FLAC || track.format == AudioFormat.WAV
-    val baseAccent = if (isLossless) LosslessCyan else CopperAmber
+    val baseAccent = if (isLossless) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
 
     var extractedDynamicColor by remember(track.id) { mutableStateOf(dynamicAccentColor) }
-    LaunchedEffect(track.id, track.albumArtUri, dynamicArtworkColorsEnabled, dynamicAccentColor) {
+    LaunchedEffect(track.id, track.albumArtUri, dynamicArtworkColorsEnabled, dynamicAccentColor, baseAccent) {
         extractedDynamicColor = when {
             !dynamicArtworkColorsEnabled -> null
             dynamicAccentColor != null -> dynamicAccentColor
@@ -199,17 +206,52 @@ fun LyricsBottomSheet(
         label = "lyrics_accent_color"
     )
 
-    val sheetBaseBg = lerp(Color(0xFF0C0E13), accentColor, 0.20f)
-    val sheetTopGlow = lerp(Color(0xFF0C0E13), accentColor, 0.36f)
-    val sheetBottomBg = lerp(Color(0xFF090B10), accentColor, 0.12f)
-    val panelSurfaceBg = lerp(Color(0xFF151923), accentColor, 0.18f)
-    val menuSurfaceBg = lerp(Color(0xFF171C26), accentColor, 0.20f)
-    val brightAccentText = lerp(accentColor, Color.White, 0.28f)
-    val onAccentContent = if (ColorUtils.calculateLuminance(accentColor.toArgb()) > 0.42) {
-        Color(0xFF0C0E13)
+    val sheetBaseBg = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF0C0E13), accentColor, 0.20f)
     } else {
-        Color.White
+        MaterialTheme.colorScheme.background
     }
+    val sheetTopGlow = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF0C0E13), accentColor, 0.36f)
+    } else {
+        lerp(MaterialTheme.colorScheme.background, accentColor, 0.14f)
+    }
+    val sheetBottomBg = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF090B10), accentColor, 0.12f)
+    } else {
+        MaterialTheme.colorScheme.background
+    }
+    val panelSurfaceBg = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF151923), accentColor, 0.18f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
+    val menuSurfaceBg = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF171C26), accentColor, 0.20f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val resultCardBg = if (dynamicArtworkColorsEnabled) {
+        lerp(Color(0xFF10131B), accentColor, 0.10f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    }
+    val primaryFg = if (dynamicArtworkColorsEnabled) {
+        Color.White
+    } else {
+        MaterialTheme.colorScheme.onBackground
+    }
+    val secondaryFg = if (dynamicArtworkColorsEnabled) {
+        Color.White.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val brightAccentText = if (dynamicArtworkColorsEnabled) {
+        lerp(accentColor, Color.White, 0.28f)
+    } else {
+        ThemePalette.ensureMinimumContrast(accentColor, sheetBaseBg, minRatio = 3.5f)
+    }
+    val onAccentContent = ThemePalette.bestContrastingTextColor(accentColor)
 
     var showOnlineSearch by remember(track.id) { mutableStateOf(false) }
     var onlineQuery by remember(track.id) {
@@ -373,7 +415,7 @@ fun LyricsBottomSheet(
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
                         contentDescription = "Cerrar letras",
-                        tint = Color.White,
+                        tint = primaryFg,
                         modifier = Modifier.size(30.dp)
                     )
                 }
@@ -386,7 +428,7 @@ fun LyricsBottomSheet(
                     Text(
                         text = track.title,
                         style = MaterialTheme.typography.titleMedium,
-                        color = Color.White,
+                        color = primaryFg,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
@@ -399,13 +441,32 @@ fun LyricsBottomSheet(
                             track.artist.ifBlank { lyrics?.sourceLabel ?: "Letras y sincronización (.lrc)" }
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.72f),
+                        color = secondaryFg,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Spacer(modifier = Modifier.size(48.dp))
+                if (onShareSnippet != null) {
+                    IconButton(
+                        onClick = {
+                            val includeTrans = hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL
+                            onShareSnippet(includeTrans)
+                        },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("lyrics_share_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = "Compartir letra o clip",
+                            tint = primaryFg,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.size(48.dp))
+                }
             }
 
             // Show top action buttons ONLY when no lyrics are loaded yet (clean view once lyrics load)
@@ -428,7 +489,7 @@ fun LyricsBottomSheet(
                             },
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = accentColor.copy(alpha = 0.24f),
-                                contentColor = Color.White
+                                contentColor = primaryFg
                             ),
                             modifier = Modifier
                                 .weight(1f)
@@ -441,7 +502,7 @@ fun LyricsBottomSheet(
                     }
                     OutlinedButton(
                         onClick = onPickLrcFile,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .weight(1f)
@@ -550,13 +611,13 @@ fun LyricsBottomSheet(
                                 onClick = { showManualTranslationEditor = false },
                                 modifier = Modifier.size(28.dp)
                             ) {
-                                Icon(Icons.Rounded.Close, contentDescription = "Cerrar editor", tint = Color.White.copy(alpha = 0.8f))
+                                Icon(Icons.Rounded.Close, contentDescription = "Cerrar editor", tint = primaryFg.copy(alpha = 0.8f))
                             }
                         }
                         Text(
                             text = "Pega una traducción línea por línea (o archivo .lrc) y se sincronizará y guardará en tu dispositivo.",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.7f)
+                            color = secondaryFg
                         )
 
                         if (onOpenHumanTranslationSite != null) {
@@ -571,7 +632,7 @@ fun LyricsBottomSheet(
                                             "Letras.com"
                                         )
                                     },
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                                     border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
                                     modifier = Modifier
                                         .weight(1f)
@@ -588,7 +649,7 @@ fun LyricsBottomSheet(
                                             "LyricsTranslate"
                                         )
                                     },
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                                     border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
                                     modifier = Modifier
                                         .weight(1f)
@@ -609,12 +670,12 @@ fun LyricsBottomSheet(
                             minLines = 2,
                             maxLines = 4,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
+                                focusedTextColor = primaryFg,
+                                unfocusedTextColor = primaryFg,
                                 focusedBorderColor = accentColor,
                                 unfocusedBorderColor = accentColor.copy(alpha = 0.35f),
                                 focusedLabelColor = brightAccentText,
-                                unfocusedLabelColor = Color.White.copy(alpha = 0.7f),
+                                unfocusedLabelColor = secondaryFg,
                                 cursorColor = accentColor
                             ),
                             modifier = Modifier
@@ -691,12 +752,12 @@ fun LyricsBottomSheet(
                                 label = { Text("Artista y canción") },
                                 singleLine = true,
                                 colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
+                                    focusedTextColor = primaryFg,
+                                    unfocusedTextColor = primaryFg,
                                     focusedBorderColor = accentColor,
                                     unfocusedBorderColor = accentColor.copy(alpha = 0.35f),
                                     focusedLabelColor = brightAccentText,
-                                    unfocusedLabelColor = Color.White.copy(alpha = 0.7f),
+                                    unfocusedLabelColor = secondaryFg,
                                     cursorColor = accentColor
                                 ),
                                 modifier = Modifier
@@ -721,7 +782,7 @@ fun LyricsBottomSheet(
                                 Icon(
                                     imageVector = Icons.Rounded.Close,
                                     contentDescription = "Ocultar búsqueda",
-                                    tint = Color.White.copy(alpha = 0.8f)
+                                    tint = primaryFg.copy(alpha = 0.8f)
                                 )
                             }
                         }
@@ -738,7 +799,7 @@ fun LyricsBottomSheet(
                             Text(
                                 text = onlineSearchError!!,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.72f)
+                                color = secondaryFg
                             )
                         }
 
@@ -752,7 +813,7 @@ fun LyricsBottomSheet(
                                 itemsIndexed(onlineResults.take(10), key = { _, item -> item.id }) { _, candidate ->
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
-                                        color = lerp(Color(0xFF10131B), accentColor, 0.10f),
+                                        color = resultCardBg,
                                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.16f)),
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -775,7 +836,7 @@ fun LyricsBottomSheet(
                                                 Text(
                                                     text = candidate.title,
                                                     style = MaterialTheme.typography.titleSmall,
-                                                    color = Color.White,
+                                                    color = primaryFg,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
@@ -787,14 +848,14 @@ fun LyricsBottomSheet(
                                                 Text(
                                                     text = metaLine,
                                                     style = MaterialTheme.typography.bodySmall,
-                                                    color = Color.White.copy(alpha = 0.68f),
+                                                    color = secondaryFg,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                                 Text(
                                                     text = if (candidate.isSynced) "Sincronizada (.lrc)" else "Solo texto",
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = if (candidate.isSynced) brightAccentText else Color.White.copy(alpha = 0.72f),
+                                                    color = if (candidate.isSynced) brightAccentText else secondaryFg,
                                                     fontWeight = FontWeight.SemiBold
                                                 )
                                             }
@@ -818,7 +879,7 @@ fun LyricsBottomSheet(
                                 Text(
                                     text = "¿Prefieres Lyricsify?",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.72f)
+                                    color = secondaryFg
                                 )
                                 TextButton(
                                     onClick = { onOpenLyricsify(onlineQuery.ifBlank { track.title }) },
@@ -862,14 +923,14 @@ fun LyricsBottomSheet(
                             Text(
                                 text = "No se encontró letra para esta canción",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = Color.White,
+                                color = primaryFg,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = "Davoo Player puede descargar letras .lrc directamente desde LRCLIB, abrir Lyricsify en tu navegador o cargar un archivo .lrc local.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color.White.copy(alpha = 0.65f),
+                                color = secondaryFg,
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -887,12 +948,10 @@ fun LyricsBottomSheet(
                         ) {
                             itemsIndexed(
                                 items = lyrics.lines,
-                                key = { index, line -> "${index}_${line.timestampMs ?: -1L}" },
-                                contentType = { _, _ -> "lyric_line" }
+                                key = { index, line -> "${index}_${line.timestampMs ?: -1L}_${line.isInstrumental}" },
+                                contentType = { _, line -> if (line.isInstrumental) "instrumental_note" else "lyric_line" }
                             ) { index, line ->
                                 val isActive = index == activeLineIndex
-                                val resolvedTranslatedText = translatedLines?.getOrNull(index)?.text
-                                    ?: line.secondaryText
                                 val lineTs = line.timestampMs
                                 val clickableMod = if (lineTs != null) {
                                     Modifier
@@ -903,50 +962,67 @@ fun LyricsBottomSheet(
                                         }
                                 } else Modifier
 
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .then(clickableMod)
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    val primaryText = when {
-                                        !resolvedTranslatedText.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
-                                            resolvedTranslatedText
-                                        else -> line.text
-                                    }
-                                    Text(
-                                        text = primaryText,
-                                        style = if (isActive) {
-                                            MaterialTheme.typography.titleLarge
-                                        } else {
-                                            MaterialTheme.typography.titleMedium
-                                        },
-                                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isActive) {
-                                            Color.White
-                                        } else {
-                                            Color.White.copy(alpha = if (lyrics.isSynced) 0.44f else 0.86f)
-                                        }
+                                if (line.isInstrumental) {
+                                    InstrumentalLyricNoteRow(
+                                        index = index,
+                                        isActive = isActive,
+                                        isPlaying = isPlaying,
+                                        isSynced = lyrics.isSynced,
+                                        accentTint = brightAccentText,
+                                        activeTint = primaryFg,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(clickableMod)
+                                            .padding(horizontal = 6.dp, vertical = 6.dp)
                                     )
-                                    if (!resolvedTranslatedText.isNullOrBlank() &&
-                                        displayMode == LyricsDisplayMode.BILINGUAL &&
-                                        !resolvedTranslatedText.equals(line.text, ignoreCase = true)
+                                } else {
+                                    val resolvedTranslatedText = translatedLines?.getOrNull(index)?.text
+                                        ?: line.secondaryText
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .then(clickableMod)
+                                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
+                                        val primaryText = when {
+                                            !resolvedTranslatedText.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
+                                                resolvedTranslatedText
+                                            else -> line.text
+                                        }
                                         Text(
-                                            text = resolvedTranslatedText,
+                                            text = primaryText,
                                             style = if (isActive) {
-                                                MaterialTheme.typography.bodyLarge
+                                                MaterialTheme.typography.titleLarge
                                             } else {
-                                                MaterialTheme.typography.bodyMedium
+                                                MaterialTheme.typography.titleMedium
                                             },
-                                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
                                             color = if (isActive) {
-                                                brightAccentText
+                                                primaryFg
                                             } else {
-                                                brightAccentText.copy(alpha = if (lyrics.isSynced) 0.45f else 0.72f)
+                                                primaryFg.copy(alpha = if (lyrics.isSynced) 0.44f else 0.86f)
                                             }
                                         )
+                                        if (!resolvedTranslatedText.isNullOrBlank() &&
+                                            displayMode == LyricsDisplayMode.BILINGUAL &&
+                                            !resolvedTranslatedText.equals(line.text, ignoreCase = true)
+                                        ) {
+                                            Text(
+                                                text = resolvedTranslatedText,
+                                                style = if (isActive) {
+                                                    MaterialTheme.typography.bodyLarge
+                                                } else {
+                                                    MaterialTheme.typography.bodyMedium
+                                                },
+                                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                                                color = if (isActive) {
+                                                    brightAccentText
+                                                } else {
+                                                    brightAccentText.copy(alpha = if (lyrics.isSynced) 0.45f else 0.72f)
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1042,7 +1118,7 @@ fun LyricsBottomSheet(
                                     tint = if (isTranslationShown) {
                                         brightAccentText
                                     } else {
-                                        Color.White.copy(alpha = 0.9f)
+                                        primaryFg.copy(alpha = 0.9f)
                                     },
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -1070,7 +1146,7 @@ fun LyricsBottomSheet(
                                             } else {
                                                 "Traducir letra (${selectedEngine.shortLabel} · ${selectedTargetLanguage.displayName})"
                                             },
-                                            color = Color.White,
+                                            color = primaryFg,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     },
@@ -1099,7 +1175,7 @@ fun LyricsBottomSheet(
                                         Text(
                                             text = "Vista de letra",
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = Color.White.copy(alpha = 0.72f)
+                                            color = secondaryFg
                                         )
                                         if (hasNativeBilingual || activeTranslationSuccess?.isSavedOffline == true) {
                                             Icon(
@@ -1126,15 +1202,15 @@ fun LyricsBottomSheet(
                                                 onClick = { displayMode = mode },
                                                 label = { Text(mode.label, style = MaterialTheme.typography.labelSmall) },
                                                 colors = FilterChipDefaults.filterChipColors(
-                                                    containerColor = Color.White.copy(alpha = 0.06f),
-                                                    labelColor = Color.White.copy(alpha = 0.85f),
+                                                    containerColor = primaryFg.copy(alpha = 0.06f),
+                                                    labelColor = primaryFg.copy(alpha = 0.85f),
                                                     selectedContainerColor = accentColor.copy(alpha = 0.26f),
                                                     selectedLabelColor = brightAccentText
                                                 ),
                                                 border = FilterChipDefaults.filterChipBorder(
                                                     enabled = true,
                                                     selected = isModeSelected,
-                                                    borderColor = Color.White.copy(alpha = 0.16f),
+                                                    borderColor = primaryFg.copy(alpha = 0.16f),
                                                     selectedBorderColor = accentColor.copy(alpha = 0.65f)
                                                 ),
                                                 modifier = Modifier.testTag("lyrics_mode_${mode.name}")
@@ -1156,7 +1232,7 @@ fun LyricsBottomSheet(
                                     Text(
                                         text = "Motor de traducción",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White.copy(alpha = 0.72f)
+                                        color = secondaryFg
                                     )
                                     Row(
                                         modifier = Modifier
@@ -1171,15 +1247,15 @@ fun LyricsBottomSheet(
                                                 onClick = { onSelectEngine?.invoke(engine) },
                                                 label = { Text(engine.shortLabel, style = MaterialTheme.typography.labelSmall) },
                                                 colors = FilterChipDefaults.filterChipColors(
-                                                    containerColor = Color.White.copy(alpha = 0.06f),
-                                                    labelColor = Color.White.copy(alpha = 0.85f),
+                                                    containerColor = primaryFg.copy(alpha = 0.06f),
+                                                    labelColor = primaryFg.copy(alpha = 0.85f),
                                                     selectedContainerColor = accentColor.copy(alpha = 0.26f),
                                                     selectedLabelColor = brightAccentText
                                                 ),
                                                 border = FilterChipDefaults.filterChipBorder(
                                                     enabled = true,
                                                     selected = isSelected,
-                                                    borderColor = Color.White.copy(alpha = 0.16f),
+                                                    borderColor = primaryFg.copy(alpha = 0.16f),
                                                     selectedBorderColor = accentColor.copy(alpha = 0.65f)
                                                 ),
                                                 modifier = Modifier
@@ -1197,7 +1273,7 @@ fun LyricsBottomSheet(
                                     Text(
                                         text = "Idioma destino",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White.copy(alpha = 0.72f)
+                                        color = secondaryFg
                                     )
                                     Row(
                                         modifier = Modifier
@@ -1217,15 +1293,15 @@ fun LyricsBottomSheet(
                                                 },
                                                 label = { Text(language.displayName, style = MaterialTheme.typography.labelSmall) },
                                                 colors = FilterChipDefaults.filterChipColors(
-                                                    containerColor = Color.White.copy(alpha = 0.06f),
-                                                    labelColor = Color.White.copy(alpha = 0.85f),
+                                                    containerColor = primaryFg.copy(alpha = 0.06f),
+                                                    labelColor = primaryFg.copy(alpha = 0.85f),
                                                     selectedContainerColor = accentColor.copy(alpha = 0.26f),
                                                     selectedLabelColor = brightAccentText
                                                 ),
                                                 border = FilterChipDefaults.filterChipBorder(
                                                     enabled = true,
                                                     selected = isSelected,
-                                                    borderColor = Color.White.copy(alpha = 0.16f),
+                                                    borderColor = primaryFg.copy(alpha = 0.16f),
                                                     selectedBorderColor = accentColor.copy(alpha = 0.65f)
                                                 ),
                                                 modifier = Modifier.testTag("translation_lang_${language.code}")
@@ -1244,7 +1320,7 @@ fun LyricsBottomSheet(
                                     text = {
                                         Text(
                                             text = "Editar / pegar traducción offline",
-                                            color = Color.White
+                                            color = primaryFg
                                         )
                                     },
                                     leadingIcon = {
@@ -1297,7 +1373,7 @@ fun LyricsBottomSheet(
                                 Icon(
                                     imageVector = Icons.Rounded.CloudDownload,
                                     contentDescription = "Opciones de descarga y archivo .lrc",
-                                    tint = Color.White.copy(alpha = 0.9f),
+                                    tint = primaryFg.copy(alpha = 0.9f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -1313,7 +1389,7 @@ fun LyricsBottomSheet(
                         ) {
                             if (onSearchOnlineLyrics != null) {
                                 DropdownMenuItem(
-                                    text = { Text("Descargar nueva letra (LRCLIB)", color = Color.White) },
+                                    text = { Text("Descargar nueva letra (LRCLIB)", color = primaryFg) },
                                     leadingIcon = {
                                         Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = brightAccentText)
                                     },
@@ -1325,7 +1401,7 @@ fun LyricsBottomSheet(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("Seleccionar archivo .lrc local", color = Color.White) },
+                                text = { Text("Seleccionar archivo .lrc local", color = primaryFg) },
                                 leadingIcon = {
                                     Icon(Icons.Rounded.UploadFile, contentDescription = null, tint = brightAccentText)
                                 },
@@ -1337,9 +1413,9 @@ fun LyricsBottomSheet(
                             )
                             if (onOpenLyricsify != null) {
                                 DropdownMenuItem(
-                                    text = { Text("Buscar en Lyricsify", color = Color.White) },
+                                    text = { Text("Buscar en Lyricsify", color = primaryFg) },
                                     leadingIcon = {
-                                        Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, tint = Color.White.copy(alpha = 0.85f))
+                                        Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, tint = primaryFg.copy(alpha = 0.85f))
                                     },
                                     onClick = {
                                         showManageMenu = false
@@ -1372,7 +1448,7 @@ fun LyricsBottomSheet(
                                         Text(
                                             text = "Sincronización: ${formatLyricsOffsetLabel(lyrics.offsetMs)}",
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = Color.White,
+                                            color = primaryFg,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
@@ -1383,7 +1459,7 @@ fun LyricsBottomSheet(
                                         OutlinedButton(
                                             onClick = { onAdjustOffset(-500L) },
                                             border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                             modifier = Modifier.testTag("lyrics_offset_minus_button")
                                         ) {
@@ -1402,7 +1478,7 @@ fun LyricsBottomSheet(
                                         OutlinedButton(
                                             onClick = { onAdjustOffset(500L) },
                                             border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
-                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                             modifier = Modifier.testTag("lyrics_offset_plus_button")
                                         ) {
@@ -1413,7 +1489,7 @@ fun LyricsBottomSheet(
                             }
                             if (hasLoadedLyrics && (onExportSaveLrc != null || onExportShareLrc != null)) {
                                 DropdownMenuItem(
-                                    text = { Text("Exportar / Compartir .lrc", color = Color.White) },
+                                    text = { Text("Exportar / Compartir .lrc", color = primaryFg) },
                                     leadingIcon = {
                                         Icon(Icons.Rounded.Share, contentDescription = null, tint = brightAccentText)
                                     },
@@ -1465,6 +1541,7 @@ fun LyricsBottomSheet(
                 isPlaying = isPlaying,
                 accentColor = accentColor,
                 onAccentContent = onAccentContent,
+                secondaryFg = secondaryFg,
                 onSeekTo = onSeekTo,
                 onTogglePlayPause = onTogglePlayPause
             )
@@ -1809,7 +1886,7 @@ fun FoldersExclusionSheet(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                border = BorderStroke(1.dp, LosslessCyan.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
@@ -1820,7 +1897,7 @@ fun FoldersExclusionSheet(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Rounded.SdCard, contentDescription = null, tint = LosslessCyan)
+                        Icon(Icons.Rounded.SdCard, contentDescription = null, tint = MaterialTheme.colorScheme.secondary)
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Tarjeta SD / Carpetas externas", style = MaterialTheme.typography.titleSmall)
                             Text(
@@ -1855,7 +1932,7 @@ fun FoldersExclusionSheet(
                                     .size(18.dp)
                                     .testTag("removing_sd_folder_indicator_$uri"),
                                 strokeWidth = 2.dp,
-                                color = CopperAmber
+                                color = MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
@@ -1879,7 +1956,7 @@ fun FoldersExclusionSheet(
                             Icon(
                                 imageVector = Icons.Rounded.FolderOpen,
                                 contentDescription = null,
-                                tint = CopperAmber,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(modifier = Modifier.width(10.dp))
@@ -1936,7 +2013,7 @@ fun FoldersExclusionSheet(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer,
                             border = if (folder.isExcluded) {
-                                BorderStroke(1.dp, CopperAmber.copy(alpha = 0.35f))
+                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                             } else null
                         ) {
                             Row(
@@ -1948,7 +2025,7 @@ fun FoldersExclusionSheet(
                                 Icon(
                                     imageVector = if (folder.isExcluded) Icons.Rounded.FolderOff else Icons.Rounded.FolderOpen,
                                     contentDescription = null,
-                                    tint = if (folder.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else CopperAmber
+                                    tint = if (folder.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
@@ -1992,6 +2069,71 @@ private fun computeActiveLyricLineIndex(
 }
 
 @Composable
+private fun InstrumentalLyricNoteRow(
+    index: Int,
+    isActive: Boolean,
+    isPlaying: Boolean,
+    isSynced: Boolean,
+    accentTint: Color,
+    activeTint: Color,
+    modifier: Modifier = Modifier
+) {
+    val pulseScale: Float
+    val pulseAlpha: Float
+    if (isActive && isPlaying) {
+        val transition = rememberInfiniteTransition(label = "instrumental_pulse")
+        val s by transition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 1.18f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 760, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "note_scale"
+        )
+        val a by transition.animateFloat(
+            initialValue = 0.78f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 760, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "note_alpha"
+        )
+        pulseScale = s
+        pulseAlpha = a
+    } else {
+        pulseScale = if (isActive) 1.08f else 1.0f
+        pulseAlpha = 1f
+    }
+
+    val tint = if (isActive) {
+        activeTint
+    } else {
+        accentTint.copy(alpha = if (isSynced) 0.42f else 0.75f)
+    }
+
+    Row(
+        modifier = modifier.testTag("lyrics_instrumental_note_$index"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.MusicNote,
+            contentDescription = "Interludio instrumental",
+            tint = tint,
+            modifier = Modifier
+                .size(28.dp)
+                .graphicsLayer {
+                    scaleX = pulseScale
+                    scaleY = pulseScale
+                    alpha = pulseAlpha
+                }
+        )
+    }
+}
+
+@Composable
 private fun LyricsScrubberSection(
     trackId: String,
     fallbackPositionMs: Long,
@@ -2000,6 +2142,7 @@ private fun LyricsScrubberSection(
     isPlaying: Boolean,
     accentColor: Color,
     onAccentContent: Color,
+    secondaryFg: Color,
     onSeekTo: (Long) -> Unit,
     onTogglePlayPause: (() -> Unit)?
 ) {
@@ -2050,7 +2193,7 @@ private fun LyricsScrubberSection(
             Text(
                 text = formatDuration(displayedPos),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.72f)
+                color = secondaryFg
             )
             if (onTogglePlayPause != null) {
                 Surface(
@@ -2074,7 +2217,7 @@ private fun LyricsScrubberSection(
             Text(
                 text = formatDuration(totalDurationMs),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.72f)
+                color = secondaryFg
             )
         }
     }

@@ -60,8 +60,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import com.example.model.AudioFormat
 import com.example.playback.PlaybackController
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
+import com.example.ui.theme.ThemePalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
@@ -155,7 +154,11 @@ fun Media3FloatingBottomBar(
 
     if (!hasCurrentTrack) return
 
-    val defaultAccent = if (format == AudioFormat.FLAC || format == AudioFormat.WAV) LosslessCyan else CopperAmber
+    val defaultAccent = if (format == AudioFormat.FLAC || format == AudioFormat.WAV) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
     val accentColor = accentOverride ?: defaultAccent
     val subtitle = remember(artist, album) {
         listOf(artist, album).filter { it.isNotBlank() }.joinToString(" · ")
@@ -294,7 +297,7 @@ fun Media3FloatingBottomBar(
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = accentColor,
-                        contentColor = Color(0xFF0C0E13)
+                        contentColor = ThemePalette.bestContrastingTextColor(accentColor)
                     ),
                     modifier = Modifier
                         .size(44.dp)
@@ -519,7 +522,11 @@ fun PlaybackControlBar(
     modifier: Modifier = Modifier,
     onHeaderClick: (() -> Unit)? = null
 ) {
-    val accentColor = if (format == AudioFormat.FLAC) LosslessCyan else CopperAmber
+    val accentColor = if (format == AudioFormat.FLAC) {
+        MaterialTheme.colorScheme.secondary
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
     val safeDuration = durationMs.coerceAtLeast(1L)
 
     var isDragging by remember { mutableStateOf(false) }
@@ -653,7 +660,7 @@ fun PlaybackControlBar(
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = if (!isPlaying) accentColor else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor = if (!isPlaying) Color(0xFF0C0E13) else accentColor
+                        contentColor = if (!isPlaying) ThemePalette.bestContrastingTextColor(accentColor) else accentColor
                     ),
                     modifier = Modifier
                         .size(48.dp)
@@ -670,7 +677,7 @@ fun PlaybackControlBar(
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = if (isPlaying) accentColor else MaterialTheme.colorScheme.surfaceContainerHighest,
-                        contentColor = if (isPlaying) Color(0xFF0C0E13) else MaterialTheme.colorScheme.onSurfaceVariant
+                        contentColor = if (isPlaying) ThemePalette.bestContrastingTextColor(accentColor) else MaterialTheme.colorScheme.onSurfaceVariant
                     ),
                     modifier = Modifier
                         .size(48.dp)

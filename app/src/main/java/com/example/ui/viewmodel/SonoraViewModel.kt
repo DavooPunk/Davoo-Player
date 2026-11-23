@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,6 +16,7 @@ import com.example.ai.LyricsTranslationLanguage
 import com.example.ai.LyricsTranslationUiState
 import com.example.ai.TranslationEngine
 import com.example.data.local.PlaybackPreferencesStore
+import com.example.data.local.SonoraBackupManager
 import com.example.data.local.SonoraDatabase
 import com.example.data.repository.AppUpdateChecker
 import com.example.data.repository.AppUpdateInfo
@@ -30,6 +32,8 @@ import com.example.data.repository.TrackTagEditRequest
 import com.example.data.repository.UpdateCheckResult
 import com.example.playback.AppUpdateNotifier
 import com.example.model.AlbumGroup
+import com.example.model.AppThemeMode
+import com.example.model.AppearancePreferences
 import com.example.model.ArtistGroup
 import com.example.model.AudioFormat
 import com.example.model.AudioSettings
@@ -51,11 +55,21 @@ import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
 import com.example.model.SdCardFolder
 import com.example.model.SortOrder
+import com.example.model.ThemePreset
 import com.example.playback.PlaybackController
 import com.example.playback.PlaybackPositionState
 import com.example.playback.PlaybackUiState
+import com.example.share.LyricsShareClipSpec
+import com.example.share.LyricsVideoExporter
+import com.example.share.ShareExportUiState
+import com.example.ui.theme.ThemePalette
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -73,6 +87,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+@Immutable
 data class SonoraUiState(
     val allTracks: List<AudioTrack> = emptyList(),
     val filteredTracks: List<AudioTrack> = emptyList(),
@@ -104,8 +119,9 @@ data class SonoraUiState(
     val snackbarMessage: String? = null
 )
 
+@Immutable
 data class AppUpdateUiState(
-    val autoCheckEnabled: Boolean = false,
+    val autoCheckEnabled: Boolean = true,
     val githubRepoUrl: String = AppUpdateChecker.DEFAULT_GITHUB_REPO_URL,
     val isChecking: Boolean = false,
     val availableUpdate: AppUpdateInfo? = null,
@@ -113,6 +129,7 @@ data class AppUpdateUiState(
     val promptConfigureRepo: Boolean = false
 )
 
+@Immutable
 data class LastFmUiState(
     val hasCredentials: Boolean = false,
     val currentApiKey: String = "",
@@ -147,6 +164,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         trackLyricsTranslationDao = database.trackLyricsTranslationDao()
     )
     private val preferencesStore = PlaybackPreferencesStore(application)
+    private val backupManager = SonoraBackupManager(application, database, preferencesStore)
     private val lastFmRepository = LastFmRepository(preferencesStore)
     private val playbackController = PlaybackController(
         context = application,
@@ -172,6 +190,12 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     val eqBands: StateFlow<List<EqBandInfo>> = playbackController.eqBands
     val sleepTimerRemainingMs: StateFlow<Long?> = playbackController.sleepTimerRemainingMs
     val stopAfterCurrentTrack: StateFlow<Boolean> = playbackController.stopAfterCurrentTrack
+
+    private val _appearancePreferences = MutableStateFlow(preferencesStore.loadAppearancePreferences())
+    val appearancePreferences: StateFlow<AppearancePreferences> = _appearancePreferences.asStateFlow()
+
+    private val _isBackupBusy = MutableStateFlow(false)
+    val isBackupBusy: StateFlow<Boolean> = _isBackupBusy.asStateFlow()
 
     private val _preferredTranslationEngine = MutableStateFlow(preferencesStore.loadTranslationEngine())
     val preferredTranslationEngine: StateFlow<TranslationEngine> = _preferredTranslationEngine
@@ -209,6 +233,10 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         }
     )
     val lyricsTranslationState: StateFlow<LyricsTranslationUiState> = lyricsTranslationCoordinator.state
+
+    private val _shareExportState = MutableStateFlow<ShareExportUiState>(ShareExportUiState.Idle)
+    val shareExportState: StateFlow<ShareExportUiState> = _shareExportState.asStateFlow()
+    private var shareExportJob: Job? = null
 
     private data class QueryParams(
         val search: String,
@@ -596,6 +624,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     override fun onCleared() {
+        shareExportJob?.cancel()
         lyricsTranslationCoordinator.reset()
         playbackController.release()
         super.onCleared()
@@ -745,9 +774,116 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleShuffle() = playbackController.toggleShuffle()
     fun cycleRepeatMode() = playbackController.cycleRepeatMode()
 
-    // DSP, EQ & Sleep Timer
+    // DSP, EQ, Appearance & Backup
     fun updateAudioSettings(newSettings: AudioSettings, immediate: Boolean = true) {
         playbackController.updateAudioSettings(newSettings, immediate = immediate)
+        if (_appearancePreferences.value.dynamicArtworkColors != newSettings.dynamicArtworkColors) {
+            val synced = _appearancePreferences.value.copy(dynamicArtworkColors = newSettings.dynamicArtworkColors)
+            _appearancePreferences.value = synced
+            preferencesStore.saveAppearancePreferences(synced)
+        }
+    }
+
+    fun updateAppearancePreferences(updated: AppearancePreferences) {
+        _appearancePreferences.value = updated
+        preferencesStore.saveAppearancePreferences(updated)
+        if (playbackController.audioSettings.value.dynamicArtworkColors != updated.dynamicArtworkColors) {
+            playbackController.updateAudioSettings(
+                playbackController.audioSettings.value.copy(dynamicArtworkColors = updated.dynamicArtworkColors),
+                immediate = true
+            )
+        }
+    }
+
+    fun setThemeMode(mode: AppThemeMode, isSystemDarkNow: Boolean) {
+        val current = _appearancePreferences.value
+        val targetDark = ThemePalette.resolveDarkFlag(mode, isSystemDarkNow)
+        val nextColors = if (current.preset == ThemePreset.CUSTOM) {
+            ThemePalette.adaptCustomSurfacesToMode(current.customColors, targetDark)
+        } else {
+            current.customColors
+        }
+        updateAppearancePreferences(
+            current.copy(
+                themeMode = mode,
+                customColors = nextColors
+            )
+        )
+    }
+
+    fun selectThemePreset(preset: ThemePreset, isSystemDarkNow: Boolean) {
+        val current = _appearancePreferences.value
+        val isDark = ThemePalette.resolveDarkFlag(current.themeMode, isSystemDarkNow)
+        val nextColors = if (preset == ThemePreset.CUSTOM && current.preset != ThemePreset.CUSTOM) {
+            ThemePalette.seedCustomColorsFromPreset(current.preset, isDark)
+        } else {
+            current.customColors
+        }
+        updateAppearancePreferences(
+            current.copy(
+                preset = preset,
+                customColors = nextColors
+            )
+        )
+    }
+
+    fun toggleDynamicArtworkColors(enabled: Boolean) {
+        val current = _appearancePreferences.value
+        updateAppearancePreferences(current.copy(dynamicArtworkColors = enabled))
+    }
+
+    fun resetAppearanceToDefaults() {
+        updateAppearancePreferences(AppearancePreferences())
+        snackbarFlow.value = "Apariencia restablecida a los valores predeterminados"
+    }
+
+    fun suggestBackupFileName(): String {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+        return "davoo_player_respaldo_$stamp.json"
+    }
+
+    fun exportBackupToUri(uri: Uri) {
+        if (_isBackupBusy.value) return
+        _isBackupBusy.value = true
+        viewModelScope.launch {
+            try {
+                backupManager.exportToUri(uri).onSuccess { payload ->
+                    snackbarFlow.value =
+                        "Respaldo exportado (${payload.playlists.size} listas y ajustes)"
+                }.onFailure { err ->
+                    snackbarFlow.value = err.message ?: "No se pudo exportar la copia de seguridad"
+                }
+            } finally {
+                _isBackupBusy.value = false
+            }
+        }
+    }
+
+    fun importBackupFromUri(uri: Uri) {
+        if (_isBackupBusy.value) return
+        _isBackupBusy.value = true
+        viewModelScope.launch {
+            try {
+                backupManager.importFromUri(uri).onSuccess { restored ->
+                    _appearancePreferences.value = restored.appearance
+                    playbackController.updateAudioSettings(restored.audioSettings, immediate = true)
+                    _customEqProfiles.value = restored.customEqProfiles
+                    _preferredTranslationEngine.value = restored.preferredTranslationEngine
+                    _updateUiState.update { cur ->
+                        cur.copy(
+                            autoCheckEnabled = restored.autoUpdateCheckEnabled,
+                            githubRepoUrl = restored.githubRepoUrl.ifBlank { AppUpdateChecker.DEFAULT_GITHUB_REPO_URL }
+                        )
+                    }
+                    snackbarFlow.value =
+                        "Respaldo restaurado (${restored.playlistsRestored} listas, tema y ajustes)"
+                }.onFailure { err ->
+                    snackbarFlow.value = err.message ?: "Archivo de respaldo inválido o dañado"
+                }
+            } finally {
+                _isBackupBusy.value = false
+            }
+        }
     }
 
     fun saveCustomEqProfile(name: String, settings: AudioSettings) {
@@ -1083,6 +1219,58 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun createShareableLrcUri(track: AudioTrack, lrcContent: String): Uri? {
         val fileName = AudioTagParsers.buildSafeLrcFileName(track.artist, track.title)
         return repository.createShareableLrcUri(fileName, lrcContent)
+    }
+
+    fun pauseMainForSharePreview(): Boolean {
+        val wasPlaying = playbackController.uiState.value.isPlaying
+        if (wasPlaying) {
+            playbackController.pause()
+        }
+        return wasPlaying
+    }
+
+    fun restoreMainAfterSharePreview(wasPlayingBeforePreview: Boolean) {
+        if (wasPlayingBeforePreview && !playbackController.uiState.value.isPlaying) {
+            playbackController.play()
+        }
+    }
+
+    fun startLyricsShareExport(spec: LyricsShareClipSpec) {
+        shareExportJob?.cancel()
+        _shareExportState.value = ShareExportUiState.Preparing
+        shareExportJob = viewModelScope.launch {
+            try {
+                val ready = LyricsVideoExporter.exportClip(
+                    context = getApplication(),
+                    spec = spec,
+                    onProgress = { progress, stageLabel ->
+                        _shareExportState.value = ShareExportUiState.Exporting(
+                            progress = progress,
+                            stageLabel = stageLabel
+                        )
+                    }
+                )
+                _shareExportState.value = ready
+            } catch (_: CancellationException) {
+                _shareExportState.value = ShareExportUiState.Idle
+            } catch (err: Throwable) {
+                _shareExportState.value = ShareExportUiState.Error(
+                    err.message?.takeIf { it.isNotBlank() }
+                        ?: "No se pudo generar el clip para compartir"
+                )
+            }
+        }
+    }
+
+    fun cancelLyricsShareExport() {
+        shareExportJob?.cancel()
+        shareExportJob = null
+        LyricsVideoExporter.cleanupSharedClipsCache(getApplication())
+        _shareExportState.value = ShareExportUiState.Idle
+    }
+
+    fun resetShareExportState() {
+        _shareExportState.value = ShareExportUiState.Idle
     }
 
     // Playlist actions + M3U Import / Export

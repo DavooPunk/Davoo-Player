@@ -255,7 +255,7 @@ class DeepLLyricsTranslator(
         val textsToTranslate = mutableListOf<String>()
         lyrics.lines.forEachIndexed { idx, line ->
             val trimmed = line.text.trim()
-            if (trimmed.isNotEmpty()) {
+            if (!line.isInstrumental && trimmed.isNotEmpty()) {
                 nonEmptyIndices.add(idx)
                 textsToTranslate.add(trimmed)
             }
@@ -402,7 +402,7 @@ class GoogleLyricsTranslator(
         val normalizedTexts = mutableListOf<String>()
         lyrics.lines.forEachIndexed { idx, line ->
             val trimmed = line.text.trim()
-            if (trimmed.isNotEmpty()) {
+            if (!line.isInstrumental && trimmed.isNotEmpty()) {
                 nonEmptyIndices.add(idx)
                 normalizedTexts.add(LyricTextNormalizer.normalizeForTranslation(trimmed))
             }

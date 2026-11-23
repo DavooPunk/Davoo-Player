@@ -116,11 +116,6 @@ import com.example.model.AudioTrack
 import com.example.model.AudioTrackMetadata
 import com.example.model.PlaylistSummary
 import com.example.playback.PlaybackUiState
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.CopperAmberBright
-import com.example.ui.theme.CopperAmberContainer
-import com.example.ui.theme.LosslessCyan
-import com.example.ui.theme.LosslessCyanContainer
 
 fun formatDuration(durationMs: Long): String {
     val totalSeconds = (durationMs.coerceAtLeast(0L) / 1000L)
@@ -229,9 +224,21 @@ fun FormatBadge(
     modifier: Modifier = Modifier
 ) {
     val isLossless = format == AudioFormat.FLAC || format == AudioFormat.WAV
-    val bgColor = if (isLossless) LosslessCyanContainer else CopperAmberContainer
-    val textColor = if (isLossless) LosslessCyan else CopperAmberBright
-    val borderColor = if (isLossless) LosslessCyan.copy(alpha = 0.4f) else CopperAmber.copy(alpha = 0.35f)
+    val bgColor = if (isLossless) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        MaterialTheme.colorScheme.primaryContainer
+    }
+    val textColor = if (isLossless) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    val borderColor = if (isLossless) {
+        MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
+    } else {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+    }
 
     Surface(
         modifier = modifier,
@@ -457,7 +464,7 @@ fun TrackRow(
                     Icon(
                         imageVector = if (track.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                         contentDescription = if (track.isFavorite) "Quitar de favoritas" else "Marcar como favorita",
-                        tint = if (track.isFavorite) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = if (track.isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -700,7 +707,7 @@ fun MiniPlayerBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(2.5.dp),
-                color = if (track.format == AudioFormat.FLAC) LosslessCyan else MaterialTheme.colorScheme.primary,
+                color = if (track.format == AudioFormat.FLAC) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
             )
         }

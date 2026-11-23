@@ -3,4 +3,7 @@
     <cache-path
         name="shared_lyrics"
         path="lyrics_share/" />
+    <cache-path
+        name="shared_clips"
+        path="shared_clips/" />
 </paths>

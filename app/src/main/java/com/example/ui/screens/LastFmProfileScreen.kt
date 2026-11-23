@@ -62,11 +62,6 @@ import com.example.model.LastFmProfileTab
 import com.example.model.LastFmTrackItem
 import com.example.ui.components.AudioAlbumArtThumbnail
 import com.example.ui.components.RemoteArtImageLoaderProvider
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.CopperAmberBright
-import com.example.ui.theme.CopperAmberContainer
-import com.example.ui.theme.LosslessCyan
-import com.example.ui.theme.LosslessCyanContainer
 import com.example.ui.viewmodel.LastFmUiState
 
 @Composable
@@ -110,7 +105,7 @@ fun LastFmProfileScreen(
                 Text(
                     text = "LAST.FM & DEEZER",
                     style = MaterialTheme.typography.labelMedium,
-                    color = LosslessCyan,
+                    color = MaterialTheme.colorScheme.secondary,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
@@ -141,7 +136,7 @@ fun LastFmProfileScreen(
                         Icon(
                             imageVector = Icons.Rounded.Key,
                             contentDescription = "Configurar claves API de Last.fm",
-                            tint = if (uiState.hasCredentials) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (uiState.hasCredentials) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -253,8 +248,8 @@ fun LastFmProfileScreen(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = CopperAmberContainer,
-                                    selectedLabelColor = CopperAmberBright
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
                                 ),
                                 modifier = Modifier
                                     .weight(1f)
@@ -276,8 +271,8 @@ fun LastFmProfileScreen(
                                     onClick = { onSelectPeriod(period) },
                                     label = { Text(period.label) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LosslessCyanContainer,
-                                        selectedLabelColor = LosslessCyan
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
                                     ),
                                     modifier = Modifier.testTag("lastfm_period_${period.apiValue}")
                                 )
@@ -323,7 +318,7 @@ fun LastFmProfileScreen(
                                 .padding(vertical = 40.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator(color = CopperAmber)
+                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 } else if (activeTracks.isEmpty()) {
@@ -412,14 +407,14 @@ private fun DisconnectedLastFmCard(
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = CopperAmberContainer,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier.size(48.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             imageVector = Icons.Rounded.GraphicEq,
                             contentDescription = null,
-                            tint = CopperAmberBright
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
@@ -446,7 +441,7 @@ private fun DisconnectedLastFmCard(
                     Text(
                         text = "Verificando sesión con Last.fm…",
                         style = MaterialTheme.typography.bodySmall,
-                        color = LosslessCyan
+                        color = MaterialTheme.colorScheme.secondary
                     )
                 }
             }
@@ -467,7 +462,7 @@ private fun DisconnectedLastFmCard(
                     onClick = onConnectClick,
                     enabled = !isAuthenticating,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = CopperAmber,
+                        containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     modifier = Modifier
@@ -524,7 +519,7 @@ private fun ConnectedLastFmCard(
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, LosslessCyan.copy(alpha = 0.35f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.35f)),
         modifier = Modifier
             .fillMaxWidth()
             .testTag("lastfm_connected_card")
@@ -563,12 +558,12 @@ private fun ConnectedLastFmCard(
                     )
                     Surface(
                         shape = RoundedCornerShape(100.dp),
-                        color = LosslessCyanContainer
+                        color = MaterialTheme.colorScheme.secondaryContainer
                     ) {
                         Text(
                             text = "Scrobbling activo",
                             style = MaterialTheme.typography.labelSmall,
-                            color = LosslessCyan,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
@@ -624,8 +619,8 @@ private fun LastFmTrackRow(
             MaterialTheme.colorScheme.surfaceContainer
         },
         border = when {
-            isPlayingPreview -> BorderStroke(1.dp, CopperAmber.copy(alpha = 0.65f))
-            item.isNowPlaying -> BorderStroke(1.dp, LosslessCyan.copy(alpha = 0.55f))
+            isPlayingPreview -> BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.65f))
+            item.isNowPlaying -> BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f))
             else -> BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f))
         },
         modifier = Modifier
@@ -644,7 +639,7 @@ private fun LastFmTrackRow(
                 Text(
                     text = "${item.rank}",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (item.rank <= 3) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (item.rank <= 3) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.width(26.dp)
                 )
@@ -670,7 +665,7 @@ private fun LastFmTrackRow(
                             Icon(
                                 imageVector = if (isPlayingPreview) Icons.Rounded.GraphicEq else Icons.Rounded.PlayArrow,
                                 contentDescription = "Reproducir preview de Deezer",
-                                tint = if (isPlayingPreview) CopperAmber else MaterialTheme.colorScheme.onSurface,
+                                tint = if (isPlayingPreview) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -688,7 +683,7 @@ private fun LastFmTrackRow(
                     Text(
                         text = item.title,
                         style = MaterialTheme.typography.titleSmall,
-                        color = if (isPlayingPreview) CopperAmberBright else MaterialTheme.colorScheme.onSurface,
+                        color = if (isPlayingPreview) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -697,13 +692,13 @@ private fun LastFmTrackRow(
                     if (item.isNowPlaying) {
                         Surface(
                             shape = RoundedCornerShape(100.dp),
-                            color = LosslessCyanContainer,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
                             modifier = Modifier.testTag("lastfm_now_playing_badge")
                         ) {
                             Text(
                                 text = "En vivo",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = LosslessCyan,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                             )
                         }
@@ -739,7 +734,7 @@ private fun LastFmTrackRow(
                     Text(
                         text = metaLine,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (item.previewUrl != null) CopperAmber.copy(alpha = 0.9f)
+                        color = if (item.previewUrl != null) MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -756,7 +751,7 @@ private fun LastFmTrackRow(
                 Icon(
                     imageVector = if (item.isLoved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = if (item.isLoved) "Quitar Me gusta en Last.fm" else "Marcar Me gusta en Last.fm",
-                    tint = if (item.isLoved) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (item.isLoved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

@@ -29,7 +29,6 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Headphones
-import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Speed
@@ -77,8 +76,6 @@ import com.example.model.AutoEqProfilesCatalog
 import com.example.model.EqBandInfo
 import com.example.model.EqPreset
 import com.example.model.HeadphoneEqProfile
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -167,7 +164,7 @@ fun EqualizerAndDspSheet(
                     Icon(
                         imageVector = Icons.Rounded.Equalizer,
                         contentDescription = null,
-                        tint = LosslessCyan
+                        tint = MaterialTheme.colorScheme.secondary
                     )
                     Column {
                         Text(
@@ -192,7 +189,7 @@ fun EqualizerAndDspSheet(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(
                     1.dp,
-                    if (draftSettings.eqEnabled) LosslessCyan.copy(alpha = 0.45f)
+                    if (draftSettings.eqEnabled) MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)
                     else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                 )
             ) {
@@ -216,7 +213,7 @@ fun EqualizerAndDspSheet(
                                 "Desactivado (respuesta plana)"
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (draftSettings.eqEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (draftSettings.eqEnabled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -235,7 +232,7 @@ fun EqualizerAndDspSheet(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
-                border = BorderStroke(1.dp, CopperAmber.copy(alpha = if (draftSettings.eqEnabled) 0.35f else 0.16f))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = if (draftSettings.eqEnabled) 0.35f else 0.16f))
             ) {
                 Column(
                     modifier = Modifier
@@ -267,7 +264,7 @@ fun EqualizerAndDspSheet(
                                 text = String.format(Locale.US, "%+.1f dB", draftSettings.preampDb),
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = CopperAmber,
+                                color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.testTag("preamp_value_label")
                             )
                             IconButton(
@@ -297,8 +294,8 @@ fun EqualizerAndDspSheet(
                         valueRange = -12f..12f,
                         enabled = draftSettings.eqEnabled,
                         colors = SliderDefaults.colors(
-                            thumbColor = CopperAmber,
-                            activeTrackColor = CopperAmber
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary
                         ),
                         modifier = Modifier.testTag("preamp_slider")
                     )
@@ -329,13 +326,13 @@ fun EqualizerAndDspSheet(
                             Icon(
                                 imageVector = Icons.Rounded.Headphones,
                                 contentDescription = null,
-                                tint = CopperAmber,
+                                tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
                                 text = "Perfiles de audífonos (AutoEq)",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = CopperAmber
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         OutlinedButton(
@@ -376,7 +373,7 @@ fun EqualizerAndDspSheet(
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            focusedBorderColor = CopperAmber,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                         ),
                         modifier = Modifier
@@ -412,13 +409,13 @@ fun EqualizerAndDspSheet(
                                     },
                                     shape = RoundedCornerShape(14.dp),
                                     color = if (isSelected) {
-                                        CopperAmber.copy(alpha = 0.18f)
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
                                     } else {
                                         MaterialTheme.colorScheme.surfaceContainerHigh
                                     },
                                     border = BorderStroke(
                                         width = 1.dp,
-                                        color = if (isSelected) CopperAmber else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                                     ),
                                     modifier = Modifier
                                         .width(178.dp)
@@ -442,14 +439,14 @@ fun EqualizerAndDspSheet(
                                                     Icon(
                                                         imageVector = Icons.Rounded.BookmarkAdded,
                                                         contentDescription = null,
-                                                        tint = LosslessCyan,
+                                                        tint = MaterialTheme.colorScheme.secondary,
                                                         modifier = Modifier.size(14.dp)
                                                     )
                                                 }
                                                 Text(
                                                     text = profile.brand,
                                                     style = MaterialTheme.typography.labelSmall,
-                                                    color = if (profile.isCustom) LosslessCyan else CopperAmber,
+                                                    color = if (profile.isCustom) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
@@ -525,8 +522,8 @@ fun EqualizerAndDspSheet(
                         },
                         label = { Text(preset.label) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
-                            selectedLabelColor = LosslessCyan
+                            selectedContainerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
+                            selectedLabelColor = MaterialTheme.colorScheme.secondary
                         ),
                         modifier = Modifier.testTag("eq_preset_${preset.name.lowercase()}")
                     )
@@ -604,8 +601,8 @@ fun EqualizerAndDspSheet(
                                 valueRange = minF..maxF,
                                 enabled = draftSettings.eqEnabled,
                                 colors = SliderDefaults.colors(
-                                    thumbColor = LosslessCyan,
-                                    activeTrackColor = LosslessCyan
+                                    thumbColor = MaterialTheme.colorScheme.secondary,
+                                    activeTrackColor = MaterialTheme.colorScheme.secondary
                                 ),
                                 modifier = Modifier
                                     .weight(1f)
@@ -614,7 +611,7 @@ fun EqualizerAndDspSheet(
                             Text(
                                 text = String.format(Locale.US, "%+.1f dB", db),
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (draftSettings.eqEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (draftSettings.eqEnabled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.width(56.dp)
                             )
                         }
@@ -626,14 +623,14 @@ fun EqualizerAndDspSheet(
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = if (draftSettings.replayGainEnabled) {
-                    LosslessCyan.copy(alpha = 0.12f)
+                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
                 } else {
                     MaterialTheme.colorScheme.surfaceContainer
                 },
                 border = BorderStroke(
                     width = 1.dp,
                     color = if (draftSettings.replayGainEnabled) {
-                        LosslessCyan.copy(alpha = 0.55f)
+                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)
                     } else {
                         MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                     }
@@ -657,7 +654,7 @@ fun EqualizerAndDspSheet(
                         Icon(
                             imageVector = Icons.Rounded.GraphicEq,
                             contentDescription = null,
-                            tint = if (draftSettings.replayGainEnabled) LosslessCyan
+                            tint = if (draftSettings.replayGainEnabled) MaterialTheme.colorScheme.secondary
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Column {
@@ -672,7 +669,7 @@ fun EqualizerAndDspSheet(
                                     "Desactivado · Volumen original de cada canción"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (draftSettings.replayGainEnabled) LosslessCyan
+                                color = if (draftSettings.replayGainEnabled) MaterialTheme.colorScheme.secondary
                                 else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -711,7 +708,7 @@ fun EqualizerAndDspSheet(
                         Text(
                             text = "${draftSettings.bassBoostStrength / 10}%",
                             style = MaterialTheme.typography.labelMedium,
-                            color = CopperAmber
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                     Slider(
@@ -721,7 +718,7 @@ fun EqualizerAndDspSheet(
                         },
                         onValueChangeFinished = { commitImmediate(draftSettings) },
                         valueRange = 0f..1000f,
-                        colors = SliderDefaults.colors(thumbColor = CopperAmber, activeTrackColor = CopperAmber),
+                        colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary),
                         modifier = Modifier.testTag("bass_boost_slider")
                     )
 
@@ -733,7 +730,7 @@ fun EqualizerAndDspSheet(
                         Text(
                             text = "${draftSettings.virtualizerStrength / 10}%",
                             style = MaterialTheme.typography.labelMedium,
-                            color = LosslessCyan
+                            color = MaterialTheme.colorScheme.secondary
                         )
                     }
                     Slider(
@@ -743,7 +740,7 @@ fun EqualizerAndDspSheet(
                         },
                         onValueChangeFinished = { commitImmediate(draftSettings) },
                         valueRange = 0f..1000f,
-                        colors = SliderDefaults.colors(thumbColor = LosslessCyan, activeTrackColor = LosslessCyan),
+                        colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.secondary, activeTrackColor = MaterialTheme.colorScheme.secondary),
                         modifier = Modifier.testTag("virtualizer_slider")
                     )
                 }
@@ -756,8 +753,8 @@ fun EqualizerAndDspSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Rounded.Tune, contentDescription = null, tint = CopperAmber, modifier = Modifier.size(18.dp))
-                Text("Transición, velocidad y balance", style = MaterialTheme.typography.titleSmall, color = CopperAmber)
+                Icon(Icons.Rounded.Tune, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Text("Transición, velocidad y balance", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -781,7 +778,7 @@ fun EqualizerAndDspSheet(
                     Text(
                         text = if (draftSettings.crossfadeSeconds == 0) "Off" else "${draftSettings.crossfadeSeconds} s",
                         style = MaterialTheme.typography.labelLarge,
-                        color = if (draftSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (draftSettings.crossfadeSeconds > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Slider(
@@ -794,8 +791,8 @@ fun EqualizerAndDspSheet(
                     valueRange = 0f..12f,
                     steps = 11,
                     colors = SliderDefaults.colors(
-                        thumbColor = CopperAmber,
-                        activeTrackColor = CopperAmber
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                        activeTrackColor = MaterialTheme.colorScheme.primary
                     ),
                     modifier = Modifier.testTag("crossfade_slider")
                 )
@@ -857,21 +854,13 @@ fun EqualizerAndDspSheet(
                 )
             }
 
-            // Gapless & Dynamic Artwork Colors
+            // Gapless Playback
             SettingToggleRow(
                 title = "Reproducción sin pausas (Gapless)",
                 subtitle = "Encadena álbumes en vivo o conceptuales sin silencios",
                 checked = draftSettings.gaplessEnabled,
                 onCheckedChange = { commitImmediate(draftSettings.copy(gaplessEnabled = it)) },
                 testTag = "gapless_switch"
-            )
-            SettingToggleRow(
-                title = "Tema dinámico por carátula",
-                subtitle = "Adapta los acentos del reproductor a los colores del álbum",
-                checked = draftSettings.dynamicArtworkColors,
-                onCheckedChange = { commitImmediate(draftSettings.copy(dynamicArtworkColors = it)) },
-                testTag = "dynamic_theme_switch",
-                icon = Icons.Rounded.Palette
             )
         }
     }
@@ -932,8 +921,8 @@ private fun EqFrequencyCurvePreview(
     eqEnabled: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val lineColor = if (eqEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-    val glowColor = if (eqEnabled) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+    val lineColor = if (eqEnabled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    val glowColor = if (eqEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
     val gridColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
 
     Box(modifier = modifier) {
@@ -1074,7 +1063,7 @@ fun SleepTimerSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = CopperAmber)
+                    Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Text("Temporizador de apagado", style = MaterialTheme.typography.titleLarge)
                 }
                 IconButton(onClick = onDismiss) {
@@ -1085,8 +1074,8 @@ fun SleepTimerSheet(
             if (remainingMs != null || stopAfterCurrentTrack) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = CopperAmber.copy(alpha = 0.16f),
-                    border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.45f))
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
                 ) {
                     Row(
                         modifier = Modifier
@@ -1103,7 +1092,7 @@ fun SleepTimerSheet(
                             },
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = CopperAmber
+                            color = MaterialTheme.colorScheme.primary
                         )
                         OutlinedButton(
                             onClick = {

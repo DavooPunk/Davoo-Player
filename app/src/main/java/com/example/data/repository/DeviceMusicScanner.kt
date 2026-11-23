@@ -554,46 +554,52 @@ class DeviceMusicScanner(private val context: Context) {
         var bitsPerSample: Int? = null
 
         val retriever = MediaMetadataRetriever()
-        runCatching {
-            retriever.setDataSource(context, uri)
-            bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
-                bitsPerSample = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
-            }
-        }
-        runCatching { retriever.release() }
-
-        val extractor = MediaExtractor()
-        runCatching {
-            extractor.setDataSource(context, uri, null)
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
-                if (mime.startsWith("audio/")) {
-                    if (sampleRate == null && format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                        sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-                    }
-                    if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                        channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                    }
-                    if (bitrate == null && format.containsKey(MediaFormat.KEY_BIT_RATE)) {
-                        bitrate = format.getInteger(MediaFormat.KEY_BIT_RATE)
-                    }
-                    if (bitsPerSample == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
-                        format.containsKey(MediaFormat.KEY_PCM_ENCODING)
-                    ) {
-                        bitsPerSample = when (format.getInteger(MediaFormat.KEY_PCM_ENCODING)) {
-                            AndroidAudioFormat.ENCODING_PCM_16BIT -> 16
-                            AndroidAudioFormat.ENCODING_PCM_FLOAT -> 32
-                            else -> null
-                        }
-                    }
-                    break
+        try {
+            runCatching {
+                retriever.setDataSource(context, uri)
+                bitrate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toIntOrNull()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    sampleRate = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)?.toIntOrNull()
+                    bitsPerSample = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)?.toIntOrNull()
                 }
             }
+        } finally {
+            runCatching { retriever.release() }
         }
-        runCatching { extractor.release() }
+
+        val extractor = MediaExtractor()
+        try {
+            runCatching {
+                extractor.setDataSource(context, uri, null)
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                    if (mime.startsWith("audio/")) {
+                        if (sampleRate == null && format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                            sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        }
+                        if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                            channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        }
+                        if (bitrate == null && format.containsKey(MediaFormat.KEY_BIT_RATE)) {
+                            bitrate = format.getInteger(MediaFormat.KEY_BIT_RATE)
+                        }
+                        if (bitsPerSample == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                            format.containsKey(MediaFormat.KEY_PCM_ENCODING)
+                        ) {
+                            bitsPerSample = when (format.getInteger(MediaFormat.KEY_PCM_ENCODING)) {
+                                AndroidAudioFormat.ENCODING_PCM_16BIT -> 16
+                                AndroidAudioFormat.ENCODING_PCM_FLOAT -> 32
+                                else -> null
+                            }
+                        }
+                        break
+                    }
+                }
+            }
+        } finally {
+            runCatching { extractor.release() }
+        }
 
         AudioTechSpecs(
             sampleRateHz = sampleRate,
@@ -727,6 +733,13 @@ class DeviceMusicScanner(private val context: Context) {
             val targets = uris.toList()
             cleanupScope.launch {
                 targets.forEach { uri -> durationCache.remove(uri) }
+            }
+        }
+
+        fun trimMemory(level: Int) {
+            when {
+                level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> durationCache.evictAll()
+                level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> durationCache.trimToSize(64)
             }
         }
 

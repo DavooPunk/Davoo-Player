@@ -1,8 +1,11 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,25 +17,29 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.BrightnessAuto
+import androidx.compose.material.icons.rounded.ColorLens
+import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SdCard
-import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -40,16 +47,14 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
-import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
@@ -58,9 +63,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.BuildConfig
 import com.example.ai.TranslationEngine
+import com.example.model.AppThemeMode
+import com.example.model.AppearancePreferences
 import com.example.model.AudioSettings
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
+import com.example.model.ThemePreset
 
 @Composable
 fun SettingsScreen(
@@ -83,7 +89,16 @@ fun SettingsScreen(
     onOpenAboutAndLegal: () -> Unit,
     bottomContentPadding: PaddingValues,
     modifier: Modifier = Modifier,
-    autoCheckUpdatesEnabled: Boolean = false,
+    appearancePreferences: AppearancePreferences = AppearancePreferences(),
+    onSelectThemeMode: (AppThemeMode) -> Unit = {},
+    onOpenAppearanceCustomization: () -> Unit = {},
+    onToggleDynamicArtworkColors: (Boolean) -> Unit = { enabled ->
+        onUpdateAudioSettings(audioSettings.copy(dynamicArtworkColors = enabled))
+    },
+    isBackupBusy: Boolean = false,
+    onExportBackup: () -> Unit = {},
+    onImportBackup: () -> Unit = {},
+    autoCheckUpdatesEnabled: Boolean = true,
     isCheckingUpdates: Boolean = false,
     updateStatusSubtitle: String? = null,
     githubRepoConfigured: Boolean = false,
@@ -95,6 +110,9 @@ fun SettingsScreen(
     onOpenLastFmProfileOrConnect: () -> Unit = {},
     onConfigureLastFmCredentials: () -> Unit = {}
 ) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -149,7 +167,7 @@ fun SettingsScreen(
                 SettingsSectionCard(title = "Memoria y biblioteca") {
                     SettingsActionRow(
                         icon = Icons.Rounded.Refresh,
-                        iconTint = CopperAmber,
+                        iconTint = primaryColor,
                         title = "Actualizar biblioteca",
                         subtitle = if (isScanning) {
                             "Escaneando canciones en memoria…"
@@ -176,7 +194,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.FolderOpen,
-                        iconTint = MaterialTheme.colorScheme.primary,
+                        iconTint = primaryColor,
                         title = "Importar archivos de audio",
                         subtitle = "Añade canciones desde cualquier carpeta del dispositivo",
                         onClick = onImportFiles,
@@ -185,7 +203,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.SdCard,
-                        iconTint = LosslessCyan,
+                        iconTint = secondaryColor,
                         title = "Vincular carpeta de tarjeta SD",
                         subtitle = if (sdCardFoldersCount > 0) {
                             "$sdCardFoldersCount ${if (sdCardFoldersCount == 1) "carpeta vinculada" else "carpetas vinculadas"}"
@@ -211,17 +229,27 @@ fun SettingsScreen(
                 }
             }
 
-            // 2. Audio y Ecualización
+            // 2. Audio y Ecualización (Crossfade, Gapless & ReplayGain live exclusively in Ecualizador y DSP)
             item(key = "section_audio") {
                 SettingsSectionCard(title = "Audio y ecualización") {
+                    val eqSummary = buildList {
+                        if (audioSettings.eqEnabled) {
+                            add("EQ ${audioSettings.activeProfileName ?: audioSettings.eqPreset.label}")
+                        } else {
+                            add("10 bandas + AutoEq")
+                        }
+                        if (audioSettings.crossfadeSeconds > 0) add("Crossfade ${audioSettings.crossfadeSeconds}s")
+                        if (audioSettings.replayGainEnabled) add("Normalizar volumen")
+                        if (audioSettings.gaplessEnabled) add("Gapless")
+                    }.joinToString(" · ")
                     SettingsActionRow(
                         icon = Icons.Rounded.Equalizer,
-                        iconTint = LosslessCyan,
+                        iconTint = secondaryColor,
                         title = "Ecualizador y DSP",
                         subtitle = if (audioSettings.eqEnabled) {
-                            "Activo · ${audioSettings.activeProfileName ?: audioSettings.eqPreset.label}"
+                            eqSummary
                         } else {
-                            "10 bandas + Preamp AutoEq, Bass Boost, Virtualizador 3D y balance"
+                            "10 bandas, Preamp, Crossfade, Gapless y Normalizar volumen"
                         },
                         onClick = onOpenEqualizer,
                         testTag = "settings_equalizer_row"
@@ -229,7 +257,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.Bedtime,
-                        iconTint = if (isSleepTimerActive) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconTint = if (isSleepTimerActive) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
                         title = "Temporizador de apagado",
                         subtitle = if (isSleepTimerActive) {
                             "Temporizador activo"
@@ -239,93 +267,141 @@ fun SettingsScreen(
                         onClick = onOpenSleepTimer,
                         testTag = "settings_sleep_timer_row"
                     )
-                    SettingsDivider()
-                    SettingsToggleRow(
-                        icon = Icons.Rounded.GraphicEq,
-                        iconTint = if (audioSettings.replayGainEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant,
-                        title = "Normalizar volumen",
-                        subtitle = "Equilibra automáticamente pistas suaves y fuertes (ReplayGain)",
-                        checked = audioSettings.replayGainEnabled,
-                        onCheckedChange = { enabled ->
-                            onUpdateAudioSettings(audioSettings.copy(replayGainEnabled = enabled))
-                        },
-                        testTag = "settings_replaygain_switch"
-                    )
-                    SettingsDivider()
-                    SettingsToggleRow(
-                        icon = Icons.Rounded.Speed,
-                        iconTint = if (audioSettings.gaplessEnabled) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
-                        title = "Reproducción sin pausas (Gapless)",
-                        subtitle = "Transición continua entre canciones de álbumes en vivo",
-                        checked = audioSettings.gaplessEnabled,
-                        onCheckedChange = { enabled ->
-                            onUpdateAudioSettings(audioSettings.copy(gaplessEnabled = enabled))
-                        },
-                        testTag = "settings_gapless_switch"
-                    )
-                    SettingsDivider()
+                }
+            }
+
+            // 3. Apariencia (Tema Oscuro / Claro / Sistema + Personalización manual + Colores dinámicos)
+            item(key = "section_personalization") {
+                SettingsSectionCard(title = "Apariencia") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Rounded.Tune,
+                                imageVector = when (appearancePreferences.themeMode) {
+                                    AppThemeMode.DARK -> Icons.Rounded.DarkMode
+                                    AppThemeMode.LIGHT -> Icons.Rounded.LightMode
+                                    AppThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
+                                },
                                 contentDescription = null,
-                                tint = if (audioSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = primaryColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Crossfade entre canciones",
+                                    text = "Modo de tema",
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    text = if (audioSettings.crossfadeSeconds > 0) {
-                                        "Solapamiento suave de ${audioSettings.crossfadeSeconds} s entre pistas"
-                                    } else {
-                                        "Desactivado · Ajusta de 1 a 12 s para mezclar transiciones"
-                                    },
+                                    text = appearancePreferences.themeMode.description,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Text(
-                                text = if (audioSettings.crossfadeSeconds == 0) "Off" else "${audioSettings.crossfadeSeconds} s",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (audioSettings.crossfadeSeconds > 0) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                         }
-                        Slider(
-                            value = audioSettings.crossfadeSeconds.toFloat().coerceIn(0f, 12f),
-                            onValueChange = { raw ->
-                                val sec = raw.roundToInt().coerceIn(0, 12)
-                                if (sec != audioSettings.crossfadeSeconds) {
-                                    onUpdateAudioSettings(audioSettings.copy(crossfadeSeconds = sec))
-                                }
-                            },
-                            valueRange = 0f..12f,
-                            steps = 11,
-                            colors = SliderDefaults.colors(
-                                thumbColor = CopperAmber,
-                                activeTrackColor = CopperAmber
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("settings_crossfade_slider")
-                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            AppThemeMode.entries.forEach { mode ->
+                                val selected = appearancePreferences.themeMode == mode
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { onSelectThemeMode(mode) },
+                                    label = {
+                                        Text(
+                                            text = mode.label,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = when (mode) {
+                                                AppThemeMode.DARK -> Icons.Rounded.DarkMode
+                                                AppThemeMode.LIGHT -> Icons.Rounded.LightMode
+                                                AppThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
+                                            },
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        selectedLeadingIconColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("settings_theme_mode_${mode.name.lowercase()}")
+                                )
+                            }
+                        }
                     }
+
+                    SettingsDivider()
+                    val presetDescription = if (appearancePreferences.preset == ThemePreset.CUSTOM) {
+                        "Personalizado · 5 colores editables"
+                    } else {
+                        "Preset: ${appearancePreferences.preset.label}"
+                    }
+                    SettingsActionRow(
+                        icon = Icons.Rounded.ColorLens,
+                        iconTint = primaryColor,
+                        title = "Personalizar colores y tema",
+                        subtitle = "$presetDescription · Presets y selector RGB/Hex",
+                        onClick = onOpenAppearanceCustomization,
+                        testTag = "settings_customize_colors_row",
+                        trailing = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.secondary)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), CircleShape)
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    )
+
+                    SettingsDivider()
+                    SettingsToggleRow(
+                        icon = Icons.Rounded.Palette,
+                        iconTint = if (appearancePreferences.dynamicArtworkColors) secondaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                        title = "Usar colores dinámicos de la carátula",
+                        subtitle = "Adapta reproductor, letras y mini barra al álbum actual; desactívalo para usar solo tus colores",
+                        checked = appearancePreferences.dynamicArtworkColors,
+                        onCheckedChange = onToggleDynamicArtworkColors,
+                        testTag = "settings_dynamic_colors_switch"
+                    )
                 }
             }
 
-            // 3. Traductor de Letras
+            // 4. Traductor de Letras
             item(key = "section_translator") {
                 SettingsSectionCard(title = "Traductor de letras") {
                     Column(
@@ -341,7 +417,7 @@ fun SettingsScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Translate,
                                 contentDescription = null,
-                                tint = LosslessCyan,
+                                tint = secondaryColor,
                                 modifier = Modifier.size(22.dp)
                             )
                             Column(modifier = Modifier.weight(1f)) {
@@ -373,8 +449,8 @@ fun SettingsScreen(
                                         )
                                     },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = LosslessCyan.copy(alpha = 0.2f),
-                                        selectedLabelColor = LosslessCyan
+                                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -392,29 +468,12 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. Personalización
-            item(key = "section_personalization") {
-                SettingsSectionCard(title = "Personalización") {
-                    SettingsToggleRow(
-                        icon = Icons.Rounded.Palette,
-                        iconTint = if (audioSettings.dynamicArtworkColors) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
-                        title = "Colores dinámicos de carátula",
-                        subtitle = "Adapta los acentos del reproductor al arte del álbum actual",
-                        checked = audioSettings.dynamicArtworkColors,
-                        onCheckedChange = { enabled ->
-                            onUpdateAudioSettings(audioSettings.copy(dynamicArtworkColors = enabled))
-                        },
-                        testTag = "settings_dynamic_colors_switch"
-                    )
-                }
-            }
-
-            // 4b. Last.fm y Scrobbling
+            // 5. Last.fm y Scrobbling
             item(key = "section_lastfm") {
                 SettingsSectionCard(title = "Last.fm y Scrobbling") {
                     SettingsActionRow(
                         icon = Icons.Rounded.Person,
-                        iconTint = if (lastFmUsername != null) LosslessCyan else CopperAmber,
+                        iconTint = if (lastFmUsername != null) secondaryColor else primaryColor,
                         title = if (lastFmUsername != null) {
                             "Last.fm conectado (@$lastFmUsername)"
                         } else {
@@ -431,7 +490,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.Key,
-                        iconTint = if (lastFmHasCredentials) CopperAmber else MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconTint = if (lastFmHasCredentials) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
                         title = "Credenciales API de Last.fm",
                         subtitle = if (lastFmHasCredentials) {
                             "API Key y Shared Secret guardados · Toca para editar"
@@ -444,12 +503,49 @@ fun SettingsScreen(
                 }
             }
 
-            // 5. Créditos, Actualizaciones y Soporte
+            // 6. Copia de Seguridad y Restauración (.json)
+            item(key = "section_backup") {
+                SettingsSectionCard(title = "Copia de seguridad (.json)") {
+                    SettingsActionRow(
+                        icon = Icons.Rounded.Upload,
+                        iconTint = primaryColor,
+                        title = "Exportar copia de seguridad (.json)",
+                        subtitle = "Guarda tema, colores, ecualizador, listas de reproducción, favoritas y ajustes",
+                        onClick = { if (!isBackupBusy) onExportBackup() },
+                        testTag = "settings_export_backup_row",
+                        trailing = {
+                            if (isBackupBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    )
+                    SettingsDivider()
+                    SettingsActionRow(
+                        icon = Icons.Rounded.Download,
+                        iconTint = secondaryColor,
+                        title = "Importar copia de seguridad (.json)",
+                        subtitle = "Restaura tu configuración visual, perfiles EQ, estadísticas y listas desde un archivo",
+                        onClick = { if (!isBackupBusy) onImportBackup() },
+                        testTag = "settings_import_backup_row"
+                    )
+                }
+            }
+
+            // 7. Créditos, Actualizaciones y Soporte
             item(key = "section_about") {
                 SettingsSectionCard(title = "Créditos, código abierto y soporte") {
                     SettingsActionRow(
                         icon = Icons.Rounded.SystemUpdate,
-                        iconTint = LosslessCyan,
+                        iconTint = secondaryColor,
                         title = "Comprobar actualizaciones",
                         subtitle = when {
                             isCheckingUpdates -> "Consultando GitHub…"
@@ -477,7 +573,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsToggleRow(
                         icon = Icons.Rounded.Refresh,
-                        iconTint = if (autoCheckUpdatesEnabled) LosslessCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                        iconTint = if (autoCheckUpdatesEnabled) secondaryColor else MaterialTheme.colorScheme.onSurfaceVariant,
                         title = "Aviso automático de actualizaciones",
                         subtitle = if (githubRepoConfigured) {
                             "Comprobación ligera diaria al abrir (Davoo-Player)"
@@ -496,7 +592,7 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsActionRow(
                         icon = Icons.Rounded.Info,
-                        iconTint = CopperAmber,
+                        iconTint = primaryColor,
                         title = "Acerca de Davoo Player",
                         subtitle = "v${BuildConfig.VERSION_NAME} · DavooPunk · Licencias MIT, legal y cambios",
                         onClick = onOpenAboutAndLegal,

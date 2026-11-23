@@ -100,11 +100,7 @@ import com.example.ui.components.AudioAlbumArtThumbnail
 import com.example.ui.components.formatDuration
 import com.example.ui.components.formatFileSize
 import com.example.ui.theme.ArtworkColorExtractor
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.CopperAmberBright
-import com.example.ui.theme.CopperAmberContainer
-import com.example.ui.theme.LosslessCyan
-import com.example.ui.theme.LosslessCyanContainer
+import com.example.ui.theme.ThemePalette
 import kotlinx.coroutines.flow.StateFlow
 
 @Composable
@@ -139,10 +135,10 @@ fun NowPlayingScreen(
     val context = LocalContext.current
     val track = playbackState.currentTrack
     val isLossless = track?.format == AudioFormat.FLAC || track?.format == AudioFormat.WAV
-    val baseAccent = if (isLossless) LosslessCyan else CopperAmber
+    val baseAccent = if (isLossless) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
 
     var dynamicColor by remember(track?.id) { mutableStateOf<Color?>(null) }
-    LaunchedEffect(track?.id, track?.albumArtUri, audioSettings.dynamicArtworkColors) {
+    LaunchedEffect(track?.id, track?.albumArtUri, audioSettings.dynamicArtworkColors, baseAccent) {
         dynamicColor = if (track != null && audioSettings.dynamicArtworkColors) {
             ArtworkColorExtractor.extractAccentColor(
                 context = context,
@@ -156,7 +152,7 @@ fun NowPlayingScreen(
     }
 
     val accentColor by animateColorAsState(
-        targetValue = dynamicColor ?: baseAccent,
+        targetValue = if (audioSettings.dynamicArtworkColors) (dynamicColor ?: baseAccent) else baseAccent,
         animationSpec = tween(durationMillis = 550),
         label = "now_playing_accent"
     )
@@ -329,14 +325,22 @@ fun NowPlayingScreen(
                     val fullBadge = if (sizeText.isNotEmpty()) "$techLabel · $sizeText" else techLabel
                     Surface(
                         shape = RoundedCornerShape(100.dp),
-                        color = if (isLossless) LosslessCyanContainer else CopperAmberContainer,
+                        color = if (isLossless) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer
+                        },
                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
                         modifier = Modifier.testTag("now_playing_tech_badge")
                     ) {
                         Text(
                             text = fullBadge,
                             style = MaterialTheme.typography.labelMedium,
-                            color = if (isLossless) LosslessCyan else CopperAmberBright,
+                            color = if (isLossless) {
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
@@ -351,8 +355,8 @@ fun NowPlayingScreen(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(100.dp),
-                        color = LosslessCyanContainer,
-                        border = BorderStroke(1.dp, LosslessCyan.copy(alpha = 0.5f)),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)),
                         modifier = Modifier
                             .padding(top = 6.dp)
                             .testTag("now_playing_scrobble_badge")
@@ -360,7 +364,7 @@ fun NowPlayingScreen(
                         Text(
                             text = scrobbleStatusNotice.orEmpty(),
                             style = MaterialTheme.typography.labelSmall,
-                            color = LosslessCyan,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
@@ -534,7 +538,7 @@ fun NowPlayingScreen(
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = accentColor,
-                        contentColor = Color(0xFF0C0E13)
+                        contentColor = ThemePalette.bestContrastingTextColor(accentColor)
                     ),
                     modifier = Modifier
                         .size(if (isCompactHeight) 62.dp else 66.dp)
@@ -607,7 +611,7 @@ fun NowPlayingScreen(
                     NowPlayingActionChip(
                         icon = Icons.Rounded.Equalizer,
                         label = if (audioSettings.eqEnabled) "EQ (${audioSettings.eqPreset.label})" else "Ecualizador",
-                        tint = if (audioSettings.eqEnabled) LosslessCyan else accentColor,
+                        tint = if (audioSettings.eqEnabled) MaterialTheme.colorScheme.secondary else accentColor,
                         onClick = onOpenEqualizer,
                         testTag = "now_playing_eq_button"
                     )
@@ -616,7 +620,7 @@ fun NowPlayingScreen(
                     NowPlayingActionChip(
                         icon = Icons.Rounded.Bedtime,
                         label = timerLabel,
-                        tint = if (sleepTimerRemainingMs != null || stopAfterCurrentTrack) CopperAmber else accentColor,
+                        tint = if (sleepTimerRemainingMs != null || stopAfterCurrentTrack) MaterialTheme.colorScheme.primary else accentColor,
                         onClick = onOpenSleepTimer,
                         testTag = "now_playing_timer_button"
                     )

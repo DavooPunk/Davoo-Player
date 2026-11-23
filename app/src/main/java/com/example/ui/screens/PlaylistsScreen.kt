@@ -99,8 +99,6 @@ import com.example.ui.components.LazyColumnFastScroller
 import com.example.ui.components.PlaylistMosaicCover
 import com.example.ui.components.TrackRow
 import com.example.ui.components.formatDuration
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 
 @Composable
 fun PlaylistsScreen(
@@ -204,8 +202,8 @@ fun PlaylistsScreen(
                             )
                             items(smartItems, key = { it.first.name }, contentType = { "smart_playlist" }) { (type, count, icon) ->
                                 val tint = if (type == SmartPlaylistType.FAVORITES || type == SmartPlaylistType.MOST_PLAYED) {
-                                    CopperAmber
-                                } else LosslessCyan
+                                    MaterialTheme.colorScheme.primary
+                                } else MaterialTheme.colorScheme.secondary
                                 Surface(
                                     onClick = { onSmartPlaylistClick(type) },
                                     shape = RoundedCornerShape(16.dp),

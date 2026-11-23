@@ -75,8 +75,6 @@ import com.example.ui.components.FormatBadge
 import com.example.ui.components.LazyColumnFastScroller
 import com.example.ui.components.TrackRow
 import com.example.ui.components.formatDuration
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 
 private enum class DrilldownSource { ARTIST, GENRE, FOLDER }
 
@@ -518,14 +516,14 @@ fun AlbumsScreen(
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
-                                        color = LosslessCyan.copy(alpha = 0.16f),
+                                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
                                         modifier = Modifier.size(44.dp)
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
                                             Icon(
                                                 Icons.Rounded.Category,
                                                 contentDescription = null,
-                                                tint = LosslessCyan
+                                                tint = MaterialTheme.colorScheme.secondary
                                             )
                                         }
                                     }
@@ -592,7 +590,7 @@ fun AlbumsScreen(
                                     Icon(
                                         imageVector = if (folder.isExcluded) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
                                         contentDescription = null,
-                                        tint = if (folder.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else CopperAmber,
+                                        tint = if (folder.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(32.dp)
                                     )
                                     Spacer(modifier = Modifier.width(12.dp))

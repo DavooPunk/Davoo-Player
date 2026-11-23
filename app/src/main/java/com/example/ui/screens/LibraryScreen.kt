@@ -76,8 +76,6 @@ import com.example.model.SortOrder
 import com.example.playback.PlaybackUiState
 import com.example.ui.components.LazyColumnFastScroller
 import com.example.ui.components.TrackRow
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 import com.example.ui.viewmodel.SonoraUiState
 
 @Composable
@@ -240,7 +238,7 @@ fun LibraryScreen(
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
                             contentDescription = "Agregar seleccionadas a la cola",
-                            tint = if (selectedTracks.isNotEmpty()) LosslessCyan
+                            tint = if (selectedTracks.isNotEmpty()) MaterialTheme.colorScheme.secondary
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
                     }
@@ -382,7 +380,7 @@ fun LibraryScreen(
                                 .testTag("audio_permission_card"),
                             shape = RoundedCornerShape(20.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer,
-                            border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.4f))
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
                         ) {
                             Column(
                                 modifier = Modifier.padding(18.dp),

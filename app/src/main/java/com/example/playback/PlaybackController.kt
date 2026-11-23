@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import androidx.compose.runtime.Immutable
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -39,11 +40,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+@Immutable
 data class PlaybackPositionState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L
 )
 
+@Immutable
 data class PlaybackUiState(
     val currentTrack: AudioTrack? = null,
     val queue: List<AudioTrack> = emptyList(),

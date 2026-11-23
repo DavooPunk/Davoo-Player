@@ -57,8 +57,6 @@ import com.example.data.repository.DeviceMusicScanner
 import com.example.model.AudioFormat
 import com.example.model.AudioTrack
 import com.example.model.LibraryFilter
-import com.example.ui.theme.CopperAmber
-import com.example.ui.theme.LosslessCyan
 
 /**
  * Standalone Composable that handles runtime audio storage permission, scans local device
@@ -234,9 +232,9 @@ fun LocalAudioScannerList(
         ) {
             LibraryFilter.entries.forEach { filter ->
                 val chipColor = when (filter) {
-                    LibraryFilter.FLAC -> LosslessCyan
-                    LibraryFilter.MP3 -> CopperAmber
-                    LibraryFilter.OTHER -> LosslessCyan
+                    LibraryFilter.FLAC -> MaterialTheme.colorScheme.secondary
+                    LibraryFilter.MP3 -> MaterialTheme.colorScheme.primary
+                    LibraryFilter.OTHER -> MaterialTheme.colorScheme.secondary
                     LibraryFilter.ALL -> MaterialTheme.colorScheme.primary
                 }
                 FilterChip(
@@ -265,7 +263,7 @@ fun LocalAudioScannerList(
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, CopperAmber.copy(alpha = 0.4f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
