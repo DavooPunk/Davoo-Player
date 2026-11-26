@@ -4,7 +4,51 @@ Historial completo de versiones, nuevas funciones, optimizaciones y correcciones
 
 ---
 
-## v2.0.6 (Actual — Compilación 11)
+## v2.1.1 (Actual — Compilación 13)
+
+### Reproduciendo ahora + Vista Integrada Estilo YT Music y Cero Modales Deslizables
+- **Carátula protagonista `1:1` de gran formato**: ocupa casi todo el ancho disponible con márgenes compactos (`16–18 dp`), esquinas redondeadas de `12 dp`, badges audiófilos limpios y menú superior (`⋮`) para acceder rápido a cola, ecualizador, temporizador, listas, etiquetas y metadatos.
+- **Barra inferior fija con 3 pestañas (*Cola*, *Letras*, *Info*)**: anclada en la base de *Reproduciendo ahora*, abre una vista fija a pantalla completa con cabecera superior (`44 dp`, minicarátula, título con *marquee*, artista, play/pausa y colapsar `⌄`), pestañas fijas y desplazamiento 100% libre sin cierres accidentales.
+- **Títulos deslizantes (`marquee`) y vistas fijas en toda la app**: eliminación total de paneles `ModalBottomSheet` reemplazados por vistas fijas a pantalla completa o diálogos centrados con botón explícito de cierre y `BackHandler`, junto a animación horizontal continua en títulos largos.
+
+### Generador de Clips de Letra Estilo Spotify y Guardado Directo
+- **Sin tope artificial de líneas (hasta 1:30)**: selecciona tantos versos consecutivos como entren en el límite máximo de **90 segundos (`1:30`)**, manteniendo el texto grande y legible.
+- **Scroll vertical animado en vivo y en video `.mp4`**: desplazamiento continuo suavizado (*FastOutSlowIn*) que centra el verso activo en negrita al `100%` de opacidad (junto a su traducción en modo bilingüe) mientras atenúa los versos pasados y futuros.
+- **Guardar en el dispositivo + Compartir**: tras renderizar un `.mp4` o `.png`, elige entre **Guardar** directamente en *Películas/Davoo Player* o *Imágenes/Davoo Player* (Scoped Storage `MediaStore` sin permisos invasivos) y **Compartir**, sin cerrar ni borrar el archivo generado.
+
+### Traductor DeepSeek AI Multiidioma Estricto
+- **Traducción completa de letras mixtas**: regla estricta en `deepseek-chat` para traducir el 100% de versos y frases extranjeras mezcladas (ej. español/inglés, japonés/inglés, spanglish) al idioma destino, con regeneración capaz de sobrescribir la caché local y renderizado bilingüe sin filtros falsos.
+
+### Catálogo AutoEq Masivo, Importador `.txt` y Preamp ReplayGain
+- **Más de 30 perfiles AutoEq integrados + Importador GraphicEQ `.txt`**: añade la línea KZ (*EDX, EDX Pro, EDX Pro X, EDX Pro 2, Castor Harman/Bass, ZSN Pro/X, ZS10 Pro/X, D-Fi, PR2*), Moondrop (*Chu, Chu II, Aria*), Tangzu (*Wan'er S.G*), 7Hz (*Zero, Zero:2*), Truthear (*Zero, Zero:RED, Hola*), Sennheiser HD 650, Philips SHP9500 y más, además del botón **«Importar .txt»** con interpolación logarítmica de 10 bandas.
+- **Preamp dedicado para ReplayGain (3.5 mm / DAC) en *Opciones***: nuevos controles exclusivos en *Opciones > Audio y ecualización* para ajustar la ganancia objetivo de ReplayGain (`-6` a `+12 dB`, `+3.0 dB` por defecto) y pistas sin etiquetas (`-12` a `0 dB`, `-4.0 dB` por defecto), incluidos en los respaldos `.json`.
+
+---
+
+## v2.1.0 (Compilación 12)
+
+### Traductor de Letras con DeepSeek AI
+- **Integración de DeepSeek AI (`deepseek-chat`)**: disponible como tercera opción junto a **DeepL** y **Google Traductor** en *Opciones > Traductor de letras* y en el menú rápido del visor inmersivo de letras. Envía todos los versos en una sola petición JSON estructurada para conservar contexto poético, modismos y exactitud en los timestamps `.lrc`, guardando el resultado en caché offline e incluyendo campo enmascarado y prueba de conexión directa (excluido de respaldos `.json`).
+
+### Auto-etiquetado Deezer y Descarga de Letras (`.lrc`) por Lotes
+- **Auto-etiquetado desde la API pública de Deezer (sin ARL ni descargas de audio)**: autocompleta carátulas HD (`1000×1000`), álbum, artista, año y número de pista directamente en el editor de etiquetas o por lotes desde *Opciones > Etiquetas y letras (.lrc)* para tus archivos MP3 y FLAC locales.
+- **Descarga de letras sincronizadas (`.lrc`) por lotes desde LRCLIB**: busca y guarda offline letras con marcas de tiempo para toda tu biblioteca existente, con opción de exportarlas a una carpeta del sistema.
+
+### Compartir Letras Mejorado: Hasta 10 Líneas, Límite 1:30, Texto Más Grande y Video 1080p
+- **Selección ampliada de 1 a 10 líneas y hasta 1:30 (90 segundos)**: permite seleccionar hasta 10 versos consecutivos en letras `.lrc` (o un fragmento libre de `15s` a `1:30`) con el límite ampliado de hasta 1:30 (90 segundos) y compatibilidad con modo Original o Bilingüe.
+- **Tamaño de letra seleccionable**: nuevo selector de tamaño (*Compacto*, *Mediano*, *Grande* por defecto y *Muy grande*) aplicado en vivo tanto en la vista previa como en las exportaciones `.png` y `.mp4`, con reajuste automático inteligente para evitar cortes.
+- **Exportación de video en 1080p Full HD (`1080×1920`)**: nuevo selector de resolución (**1080p Full HD** por defecto y **720p Ligero**) con respaldo automático a `720p` y liberación limpia del codificador en hardware de gama baja.
+
+### Experiencia Audiófila, Organización y Opciones Centralizadas
+- **Orden de biblioteca persistente**: Davoo Player recuerda automáticamente el criterio de ordenamiento elegido (*Más recientes*, *Título*, *Artista*, *Álbum* o *Duración*) entre sesiones e incluye esta preferencia en el respaldo `.json`.
+- **Escáner de sonoridad ReplayGain (`-18 dBFS`) bajo demanda**: accesible exclusivamente desde *Opciones > Audio y ecualización*, analiza pistas MP3/FLAC locales en streaming (~64 KB de RAM) y guarda las ganancias calculadas en caché local sin modificar tus archivos de audio.
+- **Fade suave al pausar y reanudar (~180 ms)**: nuevo interruptor exclusivo en *Opciones > Audio y ecualización* (también incluido en los respaldos `.json`) para atenuar suavemente el volumen en pausas y reanudaciones manuales.
+- **Telemetría de salida de audio y DAC USB en vivo**: detección sin permisos adicionales vía `AudioDeviceCallback` que muestra la ruta activa (*DAC USB*, *Audífonos*, *Bluetooth*, *HDMI* o *Altavoz*), frecuencias soportadas y profundidad de bits en *Reproduciendo ahora* y *Metadatos*.
+- **Explorador jerárquico de carpetas físicas**: navega por subcarpetas reales dentro de *Colección > Carpetas* con barra de ruta interactiva (*breadcrumbs*), reproducción o aleatorio por subcarpeta, botón *Atrás* y conservación de interruptores de exclusión.
+
+---
+
+## v2.0.6 (Compilación 11)
 
 ### Compartir Letras y Fragmentos en Video 9:16 (`.mp4`) e Imagen (`.png`)
 - **Exportación nativa de video vertical (`720x1280`, 30 fps) con audio**: crea clips listos para Estados de WhatsApp, Telegram e Historias de Instagram directamente desde el botón de compartir integrado en la esquina superior derecha del visor inmersivo de letras (con soporte tanto para letras `.lrc` como para pistas sin letra sincronizada).
