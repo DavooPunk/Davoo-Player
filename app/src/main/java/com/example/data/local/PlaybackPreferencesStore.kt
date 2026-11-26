@@ -114,9 +114,12 @@ private data class AudioSettingsDto(
     val crossfadeSeconds: Int = 0,
     val gaplessEnabled: Boolean = true,
     val replayGainEnabled: Boolean = false,
+    val replayGainPreampDb: Float = 3.0f,
+    val replayGainUntaggedPreampDb: Float = -4.0f,
     val playbackSpeed: Float = 1.0f,
     val stereoBalance: Float = 0f,
-    val dynamicArtworkColors: Boolean = true
+    val dynamicArtworkColors: Boolean = true,
+    val fadeOnPauseEnabled: Boolean = false
 )
 
 @Serializable
@@ -167,9 +170,12 @@ class PlaybackPreferencesStore(context: Context) {
                 crossfadeSeconds = dto.crossfadeSeconds.coerceIn(0, 12),
                 gaplessEnabled = dto.gaplessEnabled,
                 replayGainEnabled = dto.replayGainEnabled,
+                replayGainPreampDb = dto.replayGainPreampDb.takeIf { it.isFinite() }?.coerceIn(-6f, 12f) ?: 3.0f,
+                replayGainUntaggedPreampDb = dto.replayGainUntaggedPreampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 0f) ?: -4.0f,
                 playbackSpeed = dto.playbackSpeed.coerceIn(0.5f, 2.0f),
                 stereoBalance = dto.stereoBalance.coerceIn(-1f, 1f),
-                dynamicArtworkColors = dto.dynamicArtworkColors
+                dynamicArtworkColors = dto.dynamicArtworkColors,
+                fadeOnPauseEnabled = dto.fadeOnPauseEnabled
             )
         }.getOrDefault(AudioSettings())
     }
@@ -187,9 +193,12 @@ class PlaybackPreferencesStore(context: Context) {
             crossfadeSeconds = settings.crossfadeSeconds,
             gaplessEnabled = settings.gaplessEnabled,
             replayGainEnabled = settings.replayGainEnabled,
+            replayGainPreampDb = settings.replayGainPreampDb.takeIf { it.isFinite() }?.coerceIn(-6f, 12f) ?: 3.0f,
+            replayGainUntaggedPreampDb = settings.replayGainUntaggedPreampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 0f) ?: -4.0f,
             playbackSpeed = settings.playbackSpeed,
             stereoBalance = settings.stereoBalance,
-            dynamicArtworkColors = settings.dynamicArtworkColors
+            dynamicArtworkColors = settings.dynamicArtworkColors,
+            fadeOnPauseEnabled = settings.fadeOnPauseEnabled
         )
         runCatching {
             prefs.edit().putString(KEY_AUDIO_SETTINGS, json.encodeToString(dto)).apply()
@@ -560,6 +569,18 @@ class PlaybackPreferencesStore(context: Context) {
         }
     }
 
+    fun loadDeepSeekApiKey(): String = prefs.getString(KEY_DEEPSEEK_API_KEY, null)?.trim().orEmpty()
+
+    fun saveDeepSeekApiKey(apiKey: String) {
+        val trimmed = apiKey.trim()
+        runCatching {
+            prefs.edit().apply {
+                if (trimmed.isEmpty()) remove(KEY_DEEPSEEK_API_KEY)
+                else putString(KEY_DEEPSEEK_API_KEY, trimmed)
+            }.apply()
+        }
+    }
+
     fun isAutoUpdateCheckEnabled(): Boolean = prefs.getBoolean(KEY_AUTO_UPDATE_CHECK, true)
 
     fun setAutoUpdateCheckEnabled(enabled: Boolean) {
@@ -650,6 +671,58 @@ class PlaybackPreferencesStore(context: Context) {
 
     fun loadLastFmSharedSecretOverride(): String = prefs.getString(KEY_LFM_SHARED_SECRET, null)?.trim().orEmpty()
 
+    fun loadLibrarySortOrder(): com.example.model.SortOrder {
+        val raw = prefs.getString(KEY_LIBRARY_SORT_ORDER, null) ?: return com.example.model.SortOrder.RECENT
+        return com.example.model.SortOrder.entries.firstOrNull { it.name == raw } ?: com.example.model.SortOrder.RECENT
+    }
+
+    fun saveLibrarySortOrder(order: com.example.model.SortOrder) {
+        runCatching {
+            prefs.edit().putString(KEY_LIBRARY_SORT_ORDER, order.name).apply()
+        }
+    }
+
+    fun loadComputedReplayGainMap(): Map<String, Float> {
+        val raw = prefs.getString(KEY_COMPUTED_REPLAY_GAIN_MAP, null) ?: return emptyMap()
+        return runCatching {
+            json.decodeFromString<Map<String, Float>>(raw)
+                .filterValues { it.isFinite() }
+                .mapValues { (_, db) -> db.coerceIn(-12f, 12f) }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun loadComputedReplayGain(trackId: String): Float? {
+        if (trackId.isBlank()) return null
+        return loadComputedReplayGainMap()[trackId]
+    }
+
+    fun saveComputedReplayGainMap(entries: Map<String, Float>) {
+        val clean = entries
+            .filterKeys { it.isNotBlank() }
+            .filterValues { it.isFinite() }
+            .mapValues { (_, db) -> db.coerceIn(-12f, 12f) }
+        runCatching {
+            prefs.edit().putString(KEY_COMPUTED_REPLAY_GAIN_MAP, json.encodeToString(clean)).apply()
+        }
+    }
+
+    fun mergeComputedReplayGains(newEntries: Map<String, Float>): Map<String, Float> {
+        val merged = loadComputedReplayGainMap().toMutableMap()
+        newEntries.forEach { (id, db) ->
+            if (id.isNotBlank() && db.isFinite()) {
+                merged[id] = db.coerceIn(-12f, 12f)
+            }
+        }
+        saveComputedReplayGainMap(merged)
+        return merged
+    }
+
+    fun clearComputedReplayGains() {
+        runCatching {
+            prefs.edit().remove(KEY_COMPUTED_REPLAY_GAIN_MAP).apply()
+        }
+    }
+
     companion object {
         private const val PREFS_NAME = "sonora_audio_prefs"
         private const val KEY_AUDIO_SETTINGS = "audio_settings_json"
@@ -669,5 +742,8 @@ class PlaybackPreferencesStore(context: Context) {
         private const val KEY_LFM_API_KEY = "lfm_api_key_override"
         private const val KEY_LFM_SHARED_SECRET = "lfm_shared_secret_override"
         private const val KEY_APPEARANCE_PREFS = "appearance_preferences_json"
+        private const val KEY_LIBRARY_SORT_ORDER = "library_sort_order"
+        private const val KEY_COMPUTED_REPLAY_GAIN_MAP = "computed_replay_gain_map_json"
+        private const val KEY_DEEPSEEK_API_KEY = "deepseek_api_key"
     }
 }

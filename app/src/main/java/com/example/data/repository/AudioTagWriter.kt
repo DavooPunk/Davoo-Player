@@ -14,6 +14,8 @@ import com.example.model.AudioFormat
 import com.example.model.AudioTrack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -21,6 +23,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.TimeUnit
 
 data class TrackFileNameParts(
     val baseName: String,
@@ -457,6 +460,97 @@ object AudioTagWriter {
         }
     }
 
+    private val defaultArtworkClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+
+    fun createBatchWritePermissionSender(context: Context, tracks: List<AudioTrack>): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val mediaStoreUris = tracks.filter {
+            !it.isSafImported &&
+                !it.isDocumentTreeTrack &&
+                (it.format == AudioFormat.MP3 || it.format == AudioFormat.FLAC)
+        }.mapNotNull { track ->
+            runCatching { Uri.parse(track.contentUri) }.getOrNull()
+                ?.takeIf { uri ->
+                    uri.scheme.equals("content", ignoreCase = true) &&
+                        uri.authority?.contains("media", ignoreCase = true) == true
+                }
+        }.distinct()
+        if (mediaStoreUris.isEmpty()) return null
+        return runCatching {
+            MediaStore.createWriteRequest(context.contentResolver, mediaStoreUris).intentSender
+        }.getOrNull()
+    }
+
+    suspend fun downloadAndCacheArtworkFile(
+        context: Context,
+        imageUrl: String,
+        cacheKey: String,
+        client: OkHttpClient = defaultArtworkClient
+    ): String? = withContext(Dispatchers.IO) {
+        val cleanUrl = imageUrl.trim()
+        if (!cleanUrl.startsWith("https://", ignoreCase = true) &&
+            !cleanUrl.startsWith("http://", ignoreCase = true)
+        ) {
+            return@withContext null
+        }
+        val safeKey = cacheKey.replace(Regex("[^a-zA-Z0-9._-]"), "_").ifBlank { "cover" }
+        val coversDir = File(context.filesDir, "custom_covers").apply { mkdirs() }
+        val existingJpg = File(coversDir, "deezer_${safeKey}.jpg")
+        val existingPng = File(coversDir, "deezer_${safeKey}.png")
+        if (existingJpg.exists() && existingJpg.length() > 512L) {
+            return@withContext Uri.fromFile(existingJpg).toString()
+        }
+        if (existingPng.exists() && existingPng.length() > 512L) {
+            return@withContext Uri.fromFile(existingPng).toString()
+        }
+
+        runCatching {
+            val request = Request.Builder()
+                .url(cleanUrl)
+                .header("Accept", "image/*")
+                .get()
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@runCatching null
+                val body = response.body ?: return@runCatching null
+                val maxBytes = 5 * 1024 * 1024
+                val buffer = ByteArrayOutputStream()
+                val chunk = ByteArray(16 * 1024)
+                var total = 0
+                body.byteStream().use { input ->
+                    while (true) {
+                        val read = input.read(chunk)
+                        if (read <= 0) break
+                        total += read
+                        if (total > maxBytes) return@runCatching null
+                        buffer.write(chunk, 0, read)
+                    }
+                }
+                val bytes = buffer.toByteArray()
+                if (bytes.size < 16) return@runCatching null
+                val isPng = bytes[0] == 0x89.toByte() &&
+                    bytes[1] == 0x50.toByte() &&
+                    bytes[2] == 0x4E.toByte() &&
+                    bytes[3] == 0x47.toByte()
+                val isJpeg = bytes[0] == 0xFF.toByte() &&
+                    bytes[1] == 0xD8.toByte() &&
+                    bytes[2] == 0xFF.toByte()
+                if (!isPng && !isJpeg) return@runCatching null
+                val targetFile = if (isPng) existingPng else existingJpg
+                FileOutputStream(targetFile).use { out ->
+                    out.write(bytes)
+                    out.flush()
+                }
+                Uri.fromFile(targetFile).toString()
+            }
+        }.getOrNull()
+    }
+
     private fun extractWritePermissionSender(
         context: Context,
         uri: Uri,
@@ -485,6 +579,22 @@ object AudioTagWriter {
 
     private fun loadArtworkBytes(context: Context, uri: Uri): Pair<ByteArray, String>? {
         return runCatching {
+            if (uri.scheme.equals("file", ignoreCase = true)) {
+                val path = uri.path ?: return@runCatching null
+                val file = File(path)
+                if (!file.exists() || file.length() <= 0L || file.length() > 5L * 1024L * 1024L) {
+                    return@runCatching null
+                }
+                val bytes = file.readBytes()
+                val mime = if (path.endsWith(".png", ignoreCase = true) ||
+                    (bytes.size >= 4 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte())
+                ) {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                }
+                return@runCatching if (bytes.isEmpty()) null else bytes to mime
+            }
             val mime = context.contentResolver.getType(uri)?.lowercase()
                 ?.takeIf { it == "image/png" || it == "image/jpeg" || it == "image/jpg" }
                 ?.let { if (it == "image/jpg") "image/jpeg" else it }

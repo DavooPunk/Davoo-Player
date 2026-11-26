@@ -116,47 +116,115 @@ object AudioTagParsers {
     }
 
     /**
-     * Automatically inserts Spotify-style instrumental markers when the first lyric starts after
-     * 5,000 ms (intro instrumental) or when a pause longer than 8,000 ms exists between two lines
-     * (positioned 3,500 ms after the previous line).
+     * Automatically manages Spotify-style instrumental indicators (`♪`) with strict timing thresholds:
+     * - Initial intro before the first vocal line: shown only when the first vocal line starts >= 4,000 ms.
+     * - Explicit empty/separator lines in `.lrc`: kept only if at least 5,000 ms remain before the next vocal line
+     *   (breath pauses < 5,000 ms and trailing empty lines are ignored so vocal focus stays normal).
+     * - Consecutive vocal lines with no empty line in between and > 8,000 ms gap: estimates the first line's
+     *   vocal duration (~65 ms/char, min 2,500 ms) and inserts an instrumental marker only if remaining free
+     *   time before the next vocal line is >= 5,000 ms.
      */
     private fun insertInstrumentalInterludes(lines: List<LyricLine>): List<LyricLine> {
         if (lines.isEmpty()) return lines
-        val result = ArrayList<LyricLine>(lines.size + 4)
 
-        val firstSynced = lines.firstOrNull { it.timestampMs != null }
-        val firstTs = firstSynced?.timestampMs
-        if (firstTs != null && firstTs > INTRO_INSTRUMENTAL_THRESHOLD_MS && !firstSynced.isInstrumental) {
-            result.add(LyricLine(timestampMs = 0L, text = "", isInstrumental = true))
+        val firstVocalIndex = lines.indexOfFirst { !it.isInstrumental && it.text.isNotBlank() }
+        if (firstVocalIndex < 0) {
+            return lines
         }
 
-        for (i in lines.indices) {
+        val result = ArrayList<LyricLine>(lines.size + 4)
+        val firstVocalTs = lines[firstVocalIndex].timestampMs
+
+        if (firstVocalTs != null && firstVocalTs >= INTRO_INSTRUMENTAL_THRESHOLD_MS) {
+            val preVocalExplicit = lines
+                .subList(0, firstVocalIndex)
+                .firstOrNull {
+                    val ts = it.timestampMs
+                    ts != null && (firstVocalTs - ts) >= MIN_INSTRUMENTAL_DURATION_MS
+                }
+            val introTs = if (preVocalExplicit?.timestampMs != null && preVocalExplicit.timestampMs <= 1_500L) {
+                preVocalExplicit.timestampMs
+            } else {
+                0L
+            }
+            result.add(LyricLine(timestampMs = introTs, text = "", isInstrumental = true))
+        }
+
+        var lastVocalTs: Long? = null
+        for (i in firstVocalIndex until lines.size) {
             val current = lines[i]
+            val isExplicitEmptyOrInstr = current.isInstrumental || current.text.isBlank()
+            if (isExplicitEmptyOrInstr) {
+                val currTs = current.timestampMs
+                var nextVocalTs: Long? = null
+                for (j in (i + 1) until lines.size) {
+                    val candidate = lines[j]
+                    if (!candidate.isInstrumental && candidate.text.isNotBlank()) {
+                        nextVocalTs = candidate.timestampMs
+                        break
+                    }
+                }
+                if (currTs != null &&
+                    nextVocalTs != null &&
+                    currTs > (lastVocalTs ?: -1L) &&
+                    (nextVocalTs - currTs) >= MIN_INSTRUMENTAL_DURATION_MS &&
+                    result.lastOrNull()?.isInstrumental != true
+                ) {
+                    result.add(
+                        LyricLine(
+                            timestampMs = currTs,
+                            text = "",
+                            isInstrumental = true
+                        )
+                    )
+                }
+                continue
+            }
+
             result.add(current)
-            val next = lines.getOrNull(i + 1) ?: continue
             val currTs = current.timestampMs
-            val nextTs = next.timestampMs
-            if (currTs != null &&
+            if (currTs != null) {
+                lastVocalTs = currTs
+            }
+
+            val immediateNext = lines.getOrNull(i + 1)
+            val hasDirectVocalNext = immediateNext != null &&
+                !immediateNext.isInstrumental &&
+                immediateNext.text.isNotBlank()
+            val nextTs = immediateNext?.timestampMs
+            if (hasDirectVocalNext &&
+                currTs != null &&
                 nextTs != null &&
-                !current.isInstrumental &&
-                !next.isInstrumental &&
                 (nextTs - currTs) > INTERLUDE_GAP_THRESHOLD_MS
             ) {
-                result.add(
-                    LyricLine(
-                        timestampMs = currTs + INTERLUDE_MARKER_OFFSET_MS,
-                        text = "",
-                        isInstrumental = true
+                val estimatedVocalMs = estimateVocalDurationMs(current.text)
+                val interludeStartTs = currTs + estimatedVocalMs
+                val remainingFreeMs = nextTs - interludeStartTs
+                if (remainingFreeMs >= MIN_INSTRUMENTAL_DURATION_MS) {
+                    result.add(
+                        LyricLine(
+                            timestampMs = interludeStartTs,
+                            text = "",
+                            isInstrumental = true
+                        )
                     )
-                )
+                }
             }
         }
+
         return result
     }
 
-    private const val INTRO_INSTRUMENTAL_THRESHOLD_MS = 5_000L
+    internal fun estimateVocalDurationMs(text: String): Long {
+        val charCount = text.trim().length
+        return maxOf(MIN_ESTIMATED_VOCAL_MS, charCount * MS_PER_VOCAL_CHAR)
+    }
+
+    private const val INTRO_INSTRUMENTAL_THRESHOLD_MS = 4_000L
+    private const val MIN_INSTRUMENTAL_DURATION_MS = 5_000L
     private const val INTERLUDE_GAP_THRESHOLD_MS = 8_000L
-    private const val INTERLUDE_MARKER_OFFSET_MS = 3_500L
+    private const val MIN_ESTIMATED_VOCAL_MS = 2_500L
+    private const val MS_PER_VOCAL_CHAR = 65L
 
     /**
      * Detects bilingual `.lrc` files where two consecutive lines share the exact same timestamp

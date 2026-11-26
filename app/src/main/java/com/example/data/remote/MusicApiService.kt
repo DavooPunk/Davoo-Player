@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import com.example.BuildConfig
+import com.example.model.DeezerTagSuggestion
 import com.example.model.DeezerTrackEnrichment
 import com.example.model.LastFmPeriod
 import com.example.model.LastFmSession
@@ -320,12 +321,99 @@ class MusicApiService(
         executeDeezerSearchQuery(openQuery)
     }
 
+    /**
+     * Búsqueda pública en Deezer para auto-etiquetado de archivos locales (sin ARL ni audio).
+     * Devuelve sugerencias ordenadas por coincidencia de título/artista y duración.
+     */
+    suspend fun searchDeezerTagSuggestions(
+        title: String,
+        artist: String,
+        album: String = "",
+        durationSec: Int? = null,
+        customQuery: String? = null,
+        limit: Int = 5
+    ): Result<List<DeezerTagSuggestion>> = withContext(ioDispatcher) {
+        runCatching {
+            val safeLimit = limit.coerceIn(1, 10)
+            val explicitQuery = customQuery?.trim().orEmpty()
+            val queries = if (explicitQuery.isNotEmpty()) {
+                listOf(explicitQuery)
+            } else {
+                val primaryArtist = cleanUnknownTerm(extractPrimaryArtist(artist))
+                val cleanTrack = cleanTrackTitleForSearch(title)
+                val cleanAlbum = cleanUnknownTerm(album)
+                buildList {
+                    if (primaryArtist.isNotEmpty() && cleanTrack.isNotEmpty()) {
+                        add("artist:\"$primaryArtist\" track:\"$cleanTrack\"")
+                        add("$primaryArtist $cleanTrack")
+                    } else if (cleanTrack.isNotEmpty() && cleanAlbum.isNotEmpty()) {
+                        add("$cleanTrack $cleanAlbum")
+                    }
+                    if (cleanTrack.isNotEmpty()) {
+                        add(cleanTrack)
+                    }
+                }.distinct()
+            }
+            if (queries.isEmpty()) return@runCatching emptyList()
+
+            for (query in queries) {
+                val rawBody = executeDeezerSearchRaw(query, safeLimit) ?: continue
+                val parsed = parseDeezerTagSearchResponse(rawBody, durationSec)
+                if (parsed.isNotEmpty()) {
+                    return@runCatching parsed
+                }
+            }
+            emptyList()
+        }
+    }
+
+    /**
+     * Consulta los endpoints públicos `/track/{id}` y `/album/{albumId}` de Deezer
+     * para obtener año de lanzamiento, número de pista, artista del álbum, género y carátula HD.
+     */
+    suspend fun fetchDeezerTrackTagDetails(
+        suggestion: DeezerTagSuggestion
+    ): DeezerTagSuggestion = withContext(ioDispatcher) {
+        var enriched = suggestion
+        val base = deezerBaseUrl.trimEnd('/')
+
+        val trackBody = executePublicDeezerGet("$base/track/${suggestion.deezerTrackId}")
+        if (!trackBody.isNullOrBlank()) {
+            enriched = parseDeezerTrackDetailsResponse(trackBody, enriched)
+        }
+
+        val albumId = enriched.albumId
+        val needsAlbumDetails = albumId > 0L && (
+            enriched.year <= 0 ||
+                enriched.albumArtist.isBlank() ||
+                enriched.genre.isBlank() ||
+                enriched.coverXlUrl.isNullOrBlank()
+            )
+        if (needsAlbumDetails) {
+            val albumBody = executePublicDeezerGet("$base/album/$albumId")
+            if (!albumBody.isNullOrBlank()) {
+                enriched = parseDeezerAlbumDetailsResponse(albumBody, enriched)
+            }
+        }
+        enriched
+    }
+
     private fun executeDeezerSearchQuery(rawQuery: String): DeezerTrackEnrichment? {
+        val body = executeDeezerSearchRaw(rawQuery, limit = 1) ?: return null
+        return parseDeezerSearchResponse(body)
+    }
+
+    private fun executeDeezerSearchRaw(rawQuery: String, limit: Int): String? {
         return runCatching {
             val encodedQuery = URLEncoder.encode(rawQuery, "UTF-8")
             val base = deezerBaseUrl.trimEnd('/')
-            val url = "$base/search?q=$encodedQuery&limit=1"
+            val url = "$base/search?q=$encodedQuery&limit=$limit"
+            executePublicDeezerGet(url)
+        }.getOrNull()
+    }
 
+    private fun executePublicDeezerGet(url: String): String? {
+        return runCatching {
             val request = Request.Builder()
                 .url(url)
                 .header("Accept", "application/json")
@@ -335,9 +423,7 @@ class MusicApiService(
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@runCatching null
-                val body = response.body?.string().orEmpty()
-                if (body.isBlank()) return@runCatching null
-                parseDeezerSearchResponse(body)
+                response.body?.string()?.takeIf { it.isNotBlank() }
             }
         }.getOrNull()
     }
@@ -526,6 +612,131 @@ class MusicApiService(
                 previewUrl = preview?.ensureHttps(),
                 durationSec = duration
             )
+        }
+
+        fun parseDeezerTagSearchResponse(
+            rawJson: String,
+            targetDurationSec: Int? = null
+        ): List<DeezerTagSuggestion> {
+            val root = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
+                ?: return emptyList()
+            val dataArr = root["data"]?.jsonArray ?: return emptyList()
+            val list = dataArr.mapNotNull { elem ->
+                val obj = elem as? JsonObject ?: return@mapNotNull null
+                val id = obj["id"]?.jsonPrimitive?.longOrNull ?: return@mapNotNull null
+                val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                if (title.isEmpty()) return@mapNotNull null
+                val artist = obj["artist"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                val albumObj = obj["album"]?.jsonObject
+                val albumId = albumObj?.get("id")?.jsonPrimitive?.longOrNull ?: 0L
+                val albumTitle = albumObj?.get("title")?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                val coverXl = extractBestDeezerCover(albumObj)
+                val duration = obj["duration"]?.jsonPrimitive?.intOrNull ?: 0
+                DeezerTagSuggestion(
+                    deezerTrackId = id,
+                    title = title,
+                    artist = artist,
+                    album = albumTitle,
+                    albumId = albumId,
+                    coverXlUrl = coverXl,
+                    durationSec = duration
+                )
+            }
+            return if (targetDurationSec != null && targetDurationSec > 0) {
+                list.sortedBy { candidate ->
+                    if (candidate.durationSec > 0) kotlin.math.abs(candidate.durationSec - targetDurationSec)
+                    else Int.MAX_VALUE
+                }
+            } else {
+                list
+            }
+        }
+
+        fun parseDeezerTrackDetailsResponse(
+            rawJson: String,
+            fallback: DeezerTagSuggestion
+        ): DeezerTagSuggestion {
+            val obj = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
+                ?: return fallback
+            if (obj["error"] != null) return fallback
+            val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+                ?: fallback.title
+            val artist = obj["artist"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: fallback.artist
+            val albumObj = obj["album"]?.jsonObject
+            val albumId = albumObj?.get("id")?.jsonPrimitive?.longOrNull ?: fallback.albumId
+            val albumTitle = albumObj?.get("title")?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: fallback.album
+            val coverXl = extractBestDeezerCover(albumObj) ?: fallback.coverXlUrl
+            val trackPos = obj["track_position"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }
+                ?: fallback.trackNumber
+            val releaseYear = parseReleaseYear(
+                obj["release_date"]?.jsonPrimitive?.contentOrNull
+                    ?: albumObj?.get("release_date")?.jsonPrimitive?.contentOrNull
+            ).takeIf { it > 0 } ?: fallback.year
+            val duration = obj["duration"]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }
+                ?: fallback.durationSec
+            return fallback.copy(
+                title = title,
+                artist = artist,
+                album = albumTitle,
+                albumId = albumId,
+                year = releaseYear,
+                trackNumber = trackPos,
+                coverXlUrl = coverXl,
+                durationSec = duration
+            )
+        }
+
+        fun parseDeezerAlbumDetailsResponse(
+            rawJson: String,
+            current: DeezerTagSuggestion
+        ): DeezerTagSuggestion {
+            val obj = runCatching { json.parseToJsonElement(rawJson).jsonObject }.getOrNull()
+                ?: return current
+            if (obj["error"] != null) return current
+            val albumArtist = obj["artist"]?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: current.albumArtist
+            val genre = obj["genres"]?.jsonObject?.get("data")?.jsonArray
+                ?.firstOrNull()?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull?.trim()
+                ?.takeIf { it.isNotBlank() } ?: current.genre
+            val releaseYear = current.year.takeIf { it > 0 }
+                ?: parseReleaseYear(obj["release_date"]?.jsonPrimitive?.contentOrNull)
+            val coverXl = current.coverXlUrl ?: extractBestDeezerCover(obj)
+            return current.copy(
+                albumArtist = albumArtist,
+                genre = genre,
+                year = releaseYear,
+                coverXlUrl = coverXl
+            )
+        }
+
+        private fun extractBestDeezerCover(albumObj: JsonObject?): String? {
+            if (albumObj == null) return null
+            val raw = albumObj["cover_xl"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+                ?: albumObj["cover_big"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+                ?: albumObj["cover_medium"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+                ?: return null
+            return raw.ensureHttps()
+        }
+
+        private fun parseReleaseYear(rawDate: String?): Int {
+            val yearToken = rawDate?.trim()?.take(4) ?: return 0
+            return yearToken.toIntOrNull()?.takeIf { it in 1900..2100 } ?: 0
+        }
+
+        private fun cleanUnknownTerm(raw: String): String {
+            val trimmed = raw.trim()
+            return if (trimmed.equals("Artista desconocido", ignoreCase = true) ||
+                trimmed.equals("Álbum desconocido", ignoreCase = true) ||
+                trimmed.equals("Unknown Artist", ignoreCase = true) ||
+                trimmed.equals("Unknown Album", ignoreCase = true) ||
+                trimmed.equals("<unknown>", ignoreCase = true)
+            ) {
+                ""
+            } else {
+                trimmed
+            }
         }
 
         private fun String.ensureHttps(): String {

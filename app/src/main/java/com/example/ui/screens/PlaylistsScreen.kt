@@ -3,6 +3,7 @@ package com.example.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,8 +15,11 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -57,10 +61,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -86,6 +90,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.R
 import com.example.model.AudioFormat
 import com.example.model.AudioTrack
@@ -222,7 +228,12 @@ fun PlaylistsScreen(
                                             text = type.title,
                                             style = MaterialTheme.typography.titleSmall,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
                                         )
                                         Text(
                                             text = "$count canciones",
@@ -319,7 +330,12 @@ fun PlaylistsScreen(
                                     text = playlist.name,
                                     style = MaterialTheme.typography.titleMedium,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    softWrap = false,
+                                    modifier = Modifier.basicMarquee(
+                                        iterations = Int.MAX_VALUE,
+                                        repeatDelayMillis = 1500,
+                                        velocity = 30.dp
+                                    )
                                 )
                                 Text(
                                     text = "${playlist.trackCount} canciones · ${formatDuration(playlist.totalDurationMs)}",
@@ -374,7 +390,18 @@ fun SmartPlaylistDetailScreen(
 
     Column(modifier = Modifier.fillMaxSize().testTag("smart_playlist_detail_screen")) {
         TopAppBar(
-            title = { Text(type.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            title = {
+                Text(
+                    text = type.title,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        repeatDelayMillis = 1500,
+                        velocity = 30.dp
+                    )
+                )
+            },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Volver")
@@ -558,7 +585,12 @@ fun PlaylistDetailScreen(
                 Text(
                     text = playlist?.name ?: "Lista",
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    softWrap = false,
+                    modifier = Modifier.basicMarquee(
+                        iterations = Int.MAX_VALUE,
+                        repeatDelayMillis = 1500,
+                        velocity = 30.dp
+                    )
                 )
             },
             navigationIcon = {
@@ -747,7 +779,14 @@ fun PlaylistDetailScreen(
                         Text(
                             text = playlist.name,
                             style = MaterialTheme.typography.headlineSmall,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.basicMarquee(
+                                iterations = Int.MAX_VALUE,
+                                repeatDelayMillis = 1500,
+                                velocity = 30.dp
+                            )
                         )
                         if (playlist.description.isNotBlank()) {
                             Text(
@@ -1010,7 +1049,6 @@ fun PlaylistDetailScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BatchAddTracksSheet(
     playlist: PlaylistSummary,
@@ -1035,191 +1073,220 @@ private fun BatchAddTracksSheet(
     val selectedTracks = remember { mutableStateListOf<AudioTrack>() }
     val sheetListState = rememberLazyListState()
 
-    ModalBottomSheet(
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 26.dp)
+        BackHandler(onBack = onDismiss)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.surface
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Agregar canciones", style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        text = "${selectedTracks.size} seleccionadas",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                if (filteredAvailable.isNotEmpty()) {
-                    val allFilteredSelected = filteredAvailable.all { cand ->
-                        selectedTracks.any { it.id == cand.id }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("batch_add_close_button")
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar selector")
                     }
-                    TextButton(
-                        onClick = {
-                            if (allFilteredSelected) {
-                                val filteredIds = filteredAvailable.mapTo(HashSet()) { it.id }
-                                selectedTracks.removeAll { it.id in filteredIds }
-                            } else {
-                                val currentIds = selectedTracks.mapTo(HashSet()) { it.id }
-                                filteredAvailable.forEach { cand ->
-                                    if (cand.id !in currentIds) selectedTracks.add(cand)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Agregar canciones", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            text = "${selectedTracks.size} seleccionadas",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (filteredAvailable.isNotEmpty()) {
+                        val allFilteredSelected = filteredAvailable.all { cand ->
+                            selectedTracks.any { it.id == cand.id }
+                        }
+                        TextButton(
+                            onClick = {
+                                if (allFilteredSelected) {
+                                    val filteredIds = filteredAvailable.mapTo(HashSet()) { it.id }
+                                    selectedTracks.removeAll { it.id in filteredIds }
+                                } else {
+                                    val currentIds = selectedTracks.mapTo(HashSet()) { it.id }
+                                    filteredAvailable.forEach { cand ->
+                                        if (cand.id !in currentIds) selectedTracks.add(cand)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag("batch_add_select_all_button")
+                        ) {
+                            Text(if (allFilteredSelected) "Limpiar" else "Todo")
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Button(
+                        onClick = { onConfirm(selectedTracks.toList()) },
+                        enabled = selectedTracks.isNotEmpty(),
+                        modifier = Modifier.testTag("confirm_batch_add_button")
+                    ) {
+                        Text("Agregar")
+                    }
+                }
+
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+
+                if (availableTracks.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = { Text("Buscar canción o artista…") },
+                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Rounded.Clear, contentDescription = "Limpiar búsqueda")
                                 }
                             }
                         },
-                        modifier = Modifier.testTag("batch_add_select_all_button")
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("batch_add_search_input")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (availableTracks.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(if (allFilteredSelected) "Limpiar" else "Seleccionar todo")
+                        Text(
+                            text = "Todas las canciones disponibles ya están en esta lista.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
                     }
-                }
-                Spacer(modifier = Modifier.width(4.dp))
-                Button(
-                    onClick = { onConfirm(selectedTracks.toList()) },
-                    enabled = selectedTracks.isNotEmpty(),
-                    modifier = Modifier.testTag("confirm_batch_add_button")
-                ) {
-                    Text("Agregar")
-                }
-            }
-
-            if (availableTracks.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(10.dp))
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Buscar canción o artista…") },
-                    leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Rounded.Clear, contentDescription = "Limpiar búsqueda")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("batch_add_search_input")
-                )
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (availableTracks.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Todas las canciones disponibles ya están en esta lista.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            } else if (filteredAvailable.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Sin coincidencias para «$searchQuery».",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                ) {
-                    LazyColumn(
-                        state = sheetListState,
-                        contentPadding = PaddingValues(end = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth()
+                } else if (filteredAvailable.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
                     ) {
-                        items(filteredAvailable, key = { it.id }, contentType = { "batch_track_pick" }) { track ->
-                            val checked = selectedTracks.any { it.id == track.id }
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable {
-                                        if (checked) selectedTracks.removeAll { it.id == track.id }
-                                        else selectedTracks.add(track)
-                                    }
-                                    .padding(vertical = 6.dp, horizontal = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = { isChecked ->
-                                        if (isChecked) {
-                                            if (!checked) selectedTracks.add(track)
-                                        } else {
-                                            selectedTracks.removeAll { it.id == track.id }
+                        Text(
+                            text = "Sin coincidencias para «$searchQuery».",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    ) {
+                        LazyColumn(
+                            state = sheetListState,
+                            contentPadding = PaddingValues(end = 20.dp, bottom = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredAvailable, key = { it.id }, contentType = { "batch_track_pick" }) { track ->
+                                val checked = selectedTracks.any { it.id == track.id }
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            if (checked) selectedTracks.removeAll { it.id == track.id }
+                                            else selectedTracks.add(track)
+                                        }
+                                        .padding(vertical = 6.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = checked,
+                                        onCheckedChange = { isChecked ->
+                                            if (isChecked) {
+                                                if (!checked) selectedTracks.add(track)
+                                            } else {
+                                                selectedTracks.removeAll { it.id == track.id }
+                                            }
+                                        }
+                                    )
+                                    AudioAlbumArtThumbnail(
+                                        audioUri = track.contentUri,
+                                        albumArtUri = track.albumArtUri,
+                                        contentDescription = track.title,
+                                        cornerRadius = 8.dp,
+                                        modifier = Modifier.size(42.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = track.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
+                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            FormatBadge(format = track.format)
+                                            Text(
+                                                text = track.artist,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
                                     }
-                                )
-                                AudioAlbumArtThumbnail(
-                                    audioUri = track.contentUri,
-                                    albumArtUri = track.albumArtUri,
-                                    contentDescription = track.title,
-                                    cornerRadius = 8.dp,
-                                    modifier = Modifier.size(42.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = track.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        FormatBadge(format = track.format)
-                                        Text(
-                                            text = track.artist,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
                                 }
                             }
                         }
-                    }
 
-                    LazyColumnFastScroller(
-                        listState = sheetListState,
-                        itemCount = filteredAvailable.size,
-                        headerItemCount = 0,
-                        topPadding = 2.dp,
-                        bottomPadding = 4.dp,
-                        bubbleLabelForTrackIndex = { idx ->
-                            filteredAvailable.getOrNull(idx)?.title?.firstOrNull()?.uppercaseChar()?.toString()
-                        },
-                        modifier = Modifier.align(Alignment.CenterEnd)
-                    )
+                        LazyColumnFastScroller(
+                            listState = sheetListState,
+                            itemCount = filteredAvailable.size,
+                            headerItemCount = 0,
+                            topPadding = 2.dp,
+                            bottomPadding = 4.dp,
+                            bubbleLabelForTrackIndex = { idx ->
+                                filteredAvailable.getOrNull(idx)?.title?.firstOrNull()?.uppercaseChar()?.toString()
+                            },
+                            modifier = Modifier.align(Alignment.CenterEnd)
+                        )
+                    }
                 }
             }
         }

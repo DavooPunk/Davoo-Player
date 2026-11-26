@@ -23,6 +23,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -112,6 +113,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -134,6 +137,8 @@ import com.example.share.ShareExportUiState
 import com.example.ui.components.AppearanceCustomizationSheet
 import com.example.ui.components.AudioAlbumArtThumbnail
 import com.example.ui.components.BatchAddToPlaylistBottomSheet
+import com.example.ui.components.BatchAutoTagSheet
+import com.example.ui.components.BatchLyricsSheet
 import com.example.ui.components.CreateOrEditPlaylistDialog
 import com.example.ui.components.CreditsBottomSheet
 import com.example.ui.components.EqualizerAndDspSheet
@@ -142,8 +147,11 @@ import com.example.ui.components.LyricsBottomSheet
 import com.example.ui.components.LyricsShareSheet
 import com.example.ui.components.Media3FloatingBottomBar
 import com.example.ui.components.MiniPlayerBar
+import com.example.ui.components.NowPlayingTab
+import com.example.ui.components.NowPlayingTabsOverlay
 import com.example.ui.components.PlaylistMosaicCover
 import com.example.ui.components.QueueBottomSheet
+import com.example.ui.components.ReplayGainScanSheet
 import com.example.ui.components.SleepTimerSheet
 import com.example.ui.components.TagEditorBottomSheet
 import com.example.ui.components.TrackMetadataBottomSheet
@@ -245,18 +253,26 @@ fun SonoraApp(
     val audioSettings by viewModel.audioSettings.collectAsStateWithLifecycle()
     val eqBands by viewModel.eqBands.collectAsStateWithLifecycle()
     val customEqProfiles by viewModel.customEqProfiles.collectAsStateWithLifecycle()
-    val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
-    val stopAfterCurrentTrack by viewModel.stopAfterCurrentTrack.collectAsStateWithLifecycle()
     val lyricsTranslationState by viewModel.lyricsTranslationState.collectAsStateWithLifecycle()
     val preferredTranslationEngine by viewModel.preferredTranslationEngine.collectAsStateWithLifecycle()
+    val deepSeekApiKey by viewModel.deepSeekApiKey.collectAsStateWithLifecycle()
+    val deepSeekTestState by viewModel.deepSeekConnectionTestState.collectAsStateWithLifecycle()
     val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     val lastFmUiState by viewModel.lastFmUiState.collectAsStateWithLifecycle()
     val scrobbleNotice by viewModel.scrobbleNotice.collectAsStateWithLifecycle()
     val shareExportState by viewModel.shareExportState.collectAsStateWithLifecycle()
+    val isSavingShareClip by viewModel.isSavingShareClip.collectAsStateWithLifecycle()
+    val savedShareClipNotice by viewModel.savedShareClipNotice.collectAsStateWithLifecycle()
+    val batchAutoTagState by viewModel.batchAutoTagState.collectAsStateWithLifecycle()
+    val pendingBatchWriteSender by viewModel.pendingBatchWriteSender.collectAsStateWithLifecycle()
+    val batchLyricsState by viewModel.batchLyricsState.collectAsStateWithLifecycle()
+    val downloadedLrcExportCount by viewModel.downloadedLrcExportCount.collectAsStateWithLifecycle()
+    val replayGainScanState by viewModel.replayGainScanState.collectAsStateWithLifecycle()
     val appearancePreferences by viewModel.appearancePreferences.collectAsStateWithLifecycle()
     val isBackupBusy by viewModel.isBackupBusy.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
     var requestedArtistDrilldown by remember { mutableStateOf<String?>(null) }
+    var requestedSettingsTranslatorFocus by remember { mutableStateOf(false) }
 
     val navController = rememberNavController()
     val safePopBackStack: () -> Unit = {
@@ -287,6 +303,14 @@ fun SonoraApp(
     var isLoadingMetadata by remember { mutableStateOf(false) }
 
     var lyricsTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
+    var activeNowPlayingTab by remember { mutableStateOf<NowPlayingTab?>(null) }
+    var lastNowPlayingTab by remember { mutableStateOf(NowPlayingTab.LYRICS) }
+    LaunchedEffect(activeNowPlayingTab) {
+        if (activeNowPlayingTab != null) {
+            lastNowPlayingTab = activeNowPlayingTab!!
+        }
+    }
+    var openLyricsTranslateOnStart by remember { mutableStateOf(false) }
     var lastLyricsTrack by remember { mutableStateOf<AudioTrack?>(null) }
     LaunchedEffect(lyricsTargetTrack) {
         if (lyricsTargetTrack != null) {
@@ -295,6 +319,15 @@ fun SonoraApp(
     }
     var loadedLyrics by remember { mutableStateOf<LyricsData?>(null) }
     var isLoadingLyrics by remember { mutableStateOf(false) }
+    var nowPlayingLiveLyrics by remember { mutableStateOf<LyricsData?>(null) }
+    LaunchedEffect(playbackState.currentTrack?.id, loadedLyrics, activeNowPlayingTab) {
+        val cur = playbackState.currentTrack
+        nowPlayingLiveLyrics = when {
+            cur == null -> null
+            (lyricsTargetTrack?.id == cur.id || activeNowPlayingTab == NowPlayingTab.LYRICS) && loadedLyrics != null -> loadedLyrics
+            else -> viewModel.loadLyricsPreview(cur)
+        }
+    }
 
     var shareSnippetTargetTrack by remember { mutableStateOf<AudioTrack?>(null) }
     var lastShareSnippetTrack by remember { mutableStateOf<AudioTrack?>(null) }
@@ -416,6 +449,7 @@ fun SonoraApp(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         val target = lyricsTargetTrack
+            ?: playbackState.currentTrack.takeIf { activeNowPlayingTab == NowPlayingTab.LYRICS }
         if (uri != null && target != null) {
             coroutineScope.launch {
                 isLoadingLyrics = true
@@ -469,6 +503,14 @@ fun SonoraApp(
     ) { uri ->
         if (uri != null) {
             viewModel.importBackupFromUri(uri)
+        }
+    }
+
+    val importAutoEqTxtLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.importAutoEqProfileFromUri(uri)
         }
     }
 
@@ -693,8 +735,10 @@ fun SonoraApp(
         )
     }
 
-    LaunchedEffect(metadataTargetTrack?.id) {
-        val target = metadataTargetTrack
+    val effectiveMetadataTrack = metadataTargetTrack
+        ?: playbackState.currentTrack.takeIf { activeNowPlayingTab == NowPlayingTab.INFO }
+    LaunchedEffect(effectiveMetadataTrack?.id) {
+        val target = effectiveMetadataTrack
         if (target == null) {
             loadedTrackMetadata = null
             isLoadingMetadata = false
@@ -705,8 +749,10 @@ fun SonoraApp(
         }
     }
 
-    LaunchedEffect(lyricsTargetTrack?.id) {
-        val target = lyricsTargetTrack
+    val effectiveLyricsTrack = lyricsTargetTrack
+        ?: playbackState.currentTrack.takeIf { activeNowPlayingTab == NowPlayingTab.LYRICS }
+    LaunchedEffect(effectiveLyricsTrack?.id) {
+        val target = effectiveLyricsTrack
         viewModel.resetLyricsTranslation()
         if (target == null) {
             loadedLyrics = null
@@ -756,6 +802,30 @@ fun SonoraApp(
         }
     }
 
+    val batchWriteTagsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        viewModel.resumeBatchAutoTagAfterPermission(result.resultCode == Activity.RESULT_OK)
+    }
+
+    val exportBatchLrcFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            viewModel.exportDownloadedLrcToTreeUri(treeUri)
+        }
+    }
+
+    LaunchedEffect(pendingBatchWriteSender) {
+        val sender = pendingBatchWriteSender ?: return@LaunchedEffect
+        val launched = runCatching {
+            batchWriteTagsLauncher.launch(IntentSenderRequest.Builder(sender).build())
+        }.isSuccess
+        if (!launched) {
+            viewModel.resumeBatchAutoTagAfterPermission(false)
+        }
+    }
+
     // Discreet native notice when live scrobble is submitted
     LaunchedEffect(scrobbleNotice) {
         val notice = scrobbleNotice
@@ -772,6 +842,12 @@ fun SonoraApp(
         currentDestination?.hasRoute<Route.Albums>() == true ||
         currentDestination?.hasRoute<Route.Playlists>() == true ||
         currentDestination?.hasRoute<Route.LastFm>() == true
+
+    LaunchedEffect(isNowPlaying, playbackState.currentTrack?.id) {
+        if (!isNowPlaying || playbackState.currentTrack == null) {
+            activeNowPlayingTab = null
+        }
+    }
 
     BackHandler(enabled = uiState.isGlobalSearchOpen && isMainTab) {
         viewModel.closeGlobalSearch()
@@ -978,18 +1054,28 @@ fun SonoraApp(
                                 onShowMetadata = { track -> metadataTargetTrack = track },
                                 onAddTracksToPlaylist = { tracks -> tracksToAddToPlaylist = tracks },
                                 onEnqueueTracks = viewModel::enqueueTracks,
-                                onDeleteTracks = handleBatchDeleteTracks
+                                onDeleteTracks = handleBatchDeleteTracks,
+                                onBatchAutoTagTracks = { tracks ->
+                                    viewModel.openBatchAutoTag(tracks, onlyMissingByDefault = false)
+                                },
+                                onBatchDownloadLyrics = viewModel::openBatchLyrics
                             )
                         }
 
                         composable<Route.Settings> {
+                            val isSleepTimerActive by remember(viewModel) {
+                                combine(
+                                    viewModel.sleepTimerRemainingMs,
+                                    viewModel.stopAfterCurrentTrack
+                                ) { rem, stopAfter -> rem != null || stopAfter }.distinctUntilChanged()
+                            }.collectAsStateWithLifecycle(initialValue = false)
                             SettingsScreen(
                                 totalTracksCount = uiState.allTracks.size,
                                 isScanning = uiState.isScanning,
                                 excludedFoldersCount = uiState.excludedFolders.size,
                                 sdCardFoldersCount = uiState.sdCardFolders.size,
                                 audioSettings = audioSettings,
-                                isSleepTimerActive = sleepTimerRemainingMs != null || stopAfterCurrentTrack,
+                                isSleepTimerActive = isSleepTimerActive,
                                 preferredTranslationEngine = preferredTranslationEngine,
                                 onBack = safePopBackStack,
                                 onRefreshLibrary = viewModel::refreshLibrary,
@@ -1040,7 +1126,21 @@ fun SonoraApp(
                                 },
                                 onConfigureLastFmCredentials = {
                                     viewModel.openLastFmCredentialsDialog(connectAfterSave = false)
-                                }
+                                },
+                                onOpenBatchAutoTag = {
+                                    viewModel.openBatchAutoTag(uiState.allTracks, onlyMissingByDefault = true)
+                                },
+                                onOpenBatchLyrics = {
+                                    viewModel.openBatchLyrics(uiState.allTracks)
+                                },
+                                replayGainCachedCount = replayGainScanState.cachedTracksCount,
+                                onOpenReplayGainScanner = viewModel::openReplayGainScanner,
+                                deepSeekApiKey = deepSeekApiKey,
+                                deepSeekTestState = deepSeekTestState,
+                                onSaveDeepSeekApiKey = viewModel::saveDeepSeekApiKey,
+                                onTestDeepSeekConnection = viewModel::testDeepSeekConnection,
+                                focusTranslatorSection = requestedSettingsTranslatorFocus,
+                                onConsumedTranslatorFocus = { requestedSettingsTranslatorFocus = false }
                             )
                         }
 
@@ -1259,8 +1359,6 @@ fun SonoraApp(
                             NowPlayingScreen(
                                 playbackState = playbackState,
                                 audioSettings = audioSettings,
-                                sleepTimerRemainingMs = sleepTimerRemainingMs,
-                                stopAfterCurrentTrack = stopAfterCurrentTrack,
                                 onCollapse = safePopBackStack,
                                 onTogglePlayPause = viewModel::togglePlayPause,
                                 onSeekTo = viewModel::seekTo,
@@ -1275,7 +1373,10 @@ fun SonoraApp(
                                 onToggleFavorite = viewModel::toggleFavorite,
                                 onOpenEqualizer = { showEqualizerSheet = true },
                                 onOpenSleepTimer = { showSleepTimerSheet = true },
-                                onShowLyrics = { track -> lyricsTargetTrack = track },
+                                onShowLyrics = { track ->
+                                    openLyricsTranslateOnStart = false
+                                    lyricsTargetTrack = track
+                                },
                                 onEditTags = { track ->
                                     pickedCustomCoverUri = null
                                     tagEditorTargetTrack = track
@@ -1297,7 +1398,27 @@ fun SonoraApp(
                                         restoreState = true
                                     }
                                 },
-                                livePositionFlow = viewModel.playbackPosition
+                                livePositionFlow = viewModel.playbackPosition,
+                                sleepTimerRemainingFlow = viewModel.sleepTimerRemainingMs,
+                                stopAfterCurrentFlow = viewModel.stopAfterCurrentTrack,
+                                currentTrackLyrics = nowPlayingLiveLyrics,
+                                onQuickTranslateLyrics = { track ->
+                                    openLyricsTranslateOnStart = true
+                                    lyricsTargetTrack = track
+                                },
+                                onShareLyricsSnippet = { track ->
+                                    openShareSnippet(
+                                        track,
+                                        nowPlayingLiveLyrics,
+                                        null,
+                                        false,
+                                        viewModel.playbackPosition.value.positionMs
+                                    )
+                                },
+                                onOpenYtMusicTab = { tab ->
+                                    openLyricsTranslateOnStart = false
+                                    activeNowPlayingTab = tab
+                                }
                             )
                         }
                     }
@@ -1357,6 +1478,189 @@ fun SonoraApp(
             }
         }
 
+        // YT Music-style 3-tab full-screen overlay (Cola, Letras, Info) anchored to Now Playing
+        AnimatedVisibility(
+            visible = activeNowPlayingTab != null && playbackState.currentTrack != null && isNowPlaying,
+            enter = slideInVertically(animationSpec = tween(260)) { it } + fadeIn(animationSpec = tween(180)),
+            exit = slideOutVertically(animationSpec = tween(240)) { it } + fadeOut(animationSpec = tween(160)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            val target = playbackState.currentTrack
+            if (target != null) {
+                val translatedForTarget = (lyricsTranslationState as? LyricsTranslationUiState.Success)
+                    ?.takeIf { it.trackId == target.id }
+                    ?.translatedLyrics
+                NowPlayingTabsOverlay(
+                    track = target,
+                    activeTab = activeNowPlayingTab ?: lastNowPlayingTab,
+                    onSelectTab = { activeNowPlayingTab = it },
+                    onCollapse = { activeNowPlayingTab = null },
+                    playbackState = playbackState,
+                    onTogglePlayPause = viewModel::togglePlayPause,
+                    onSelectQueueIndex = viewModel::skipToQueueIndex,
+                    onRemoveQueueIndex = viewModel::removeFromQueue,
+                    onMoveQueueItem = viewModel::moveQueueItem,
+                    lyrics = loadedLyrics,
+                    isLoadingLyrics = isLoadingLyrics,
+                    onSeekTo = viewModel::seekTo,
+                    onPickLrcFile = {
+                        pickLrcFileLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
+                    },
+                    metadata = loadedTrackMetadata,
+                    isLoadingMetadata = isLoadingMetadata,
+                    dynamicArtworkColorsEnabled = audioSettings.dynamicArtworkColors,
+                    dynamicAccentColor = dynamicBottomBarAccent,
+                    onClearSavedLyrics = {
+                        coroutineScope.launch {
+                            isLoadingLyrics = true
+                            loadedLyrics = viewModel.clearSavedLyrics(target)
+                            isLoadingLyrics = false
+                        }
+                    },
+                    onSearchOnlineLyrics = { customQuery ->
+                        viewModel.searchOnlineLyrics(target, customQuery)
+                    },
+                    onSaveOnlineLyrics = { candidate ->
+                        isLoadingLyrics = true
+                        val saved = viewModel.saveDownloadedLyrics(target, candidate)
+                        if (saved != null) {
+                            loadedLyrics = saved
+                        }
+                        isLoadingLyrics = false
+                    },
+                    onOpenLyricsify = { query ->
+                        val url = LrcLibLyricsFetcher.buildLyricsifySearchUrl(query)
+                        val opened = runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }.isSuccess
+                        if (!opened) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("No se encontró un navegador para abrir Lyricsify")
+                            }
+                        }
+                    },
+                    translationState = lyricsTranslationState,
+                    selectedEngine = preferredTranslationEngine,
+                    onSelectEngine = viewModel::setPreferredTranslationEngine,
+                    onTranslateLyrics = { lyricsData, targetLanguage, engine ->
+                        viewModel.translateLyrics(target, lyricsData, targetLanguage, engine)
+                    },
+                    onSaveManualTranslation = { lyricsData, pastedText, targetLanguage ->
+                        viewModel.saveManualLyricsTranslation(target, lyricsData, pastedText, targetLanguage)
+                    },
+                    onClearSavedTranslation = {
+                        viewModel.clearSavedLyricsTranslation(target)
+                    },
+                    onOpenHumanTranslationSite = { url, siteName ->
+                        val opened = runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }.isSuccess
+                        if (!opened) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("No se encontró un navegador para abrir $siteName")
+                            }
+                        }
+                    },
+                    onAdjustOffset = { deltaMs ->
+                        val current = loadedLyrics ?: return@NowPlayingTabsOverlay
+                        coroutineScope.launch {
+                            loadedLyrics = viewModel.adjustLyricsOffset(target, current, deltaMs)
+                        }
+                    },
+                    onResetOffset = {
+                        val current = loadedLyrics ?: return@NowPlayingTabsOverlay
+                        coroutineScope.launch {
+                            loadedLyrics = viewModel.resetLyricsOffset(target, current)
+                        }
+                    },
+                    onExportSaveLrc = { includeTrans ->
+                        val current = loadedLyrics ?: return@NowPlayingTabsOverlay
+                        pendingExportLrcContent = viewModel.buildExportableLrcContent(
+                            track = target,
+                            lyrics = current,
+                            translatedLyrics = translatedForTarget,
+                            includeTranslation = includeTrans
+                        )
+                        exportLrcLauncher.launch(viewModel.suggestLrcFileName(target))
+                    },
+                    onExportShareLrc = { includeTrans ->
+                        val current = loadedLyrics ?: return@NowPlayingTabsOverlay
+                        val content = viewModel.buildExportableLrcContent(
+                            track = target,
+                            lyrics = current,
+                            translatedLyrics = translatedForTarget,
+                            includeTranslation = includeTrans
+                        )
+                        coroutineScope.launch {
+                            val shareUri = viewModel.createShareableLrcUri(target, content)
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                if (shareUri != null) {
+                                    type = "application/octet-stream"
+                                    putExtra(Intent.EXTRA_STREAM, shareUri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                } else {
+                                    type = "text/plain"
+                                }
+                                putExtra(Intent.EXTRA_SUBJECT, "${target.artist} - ${target.title}.lrc")
+                                putExtra(Intent.EXTRA_TEXT, content)
+                            }
+                            val opened = runCatching {
+                                context.startActivity(
+                                    Intent.createChooser(shareIntent, "Compartir archivo .lrc")
+                                )
+                            }.isSuccess
+                            if (!opened) {
+                                snackbarHostState.showSnackbar("No se encontró una aplicación para compartir .lrc")
+                            }
+                        }
+                    },
+                    livePositionFlow = viewModel.playbackPosition,
+                    onShareSnippet = { includeTrans ->
+                        openShareSnippet(
+                            target,
+                            loadedLyrics,
+                            translatedForTarget,
+                            includeTrans,
+                            viewModel.playbackPosition.value.positionMs
+                        )
+                    },
+                    hasDeepSeekApiKey = deepSeekApiKey.isNotBlank(),
+                    onOpenTranslatorSettings = {
+                        openLyricsTranslateOnStart = false
+                        activeNowPlayingTab = null
+                        viewModel.resetLyricsTranslation()
+                        safePopBackStack()
+                        requestedSettingsTranslatorFocus = true
+                        navController.navigate(Route.Settings) {
+                            launchSingleTop = true
+                        }
+                    },
+                    openTranslateMenuOnStart = openLyricsTranslateOnStart,
+                    onEditTags = { editTarget ->
+                        pickedCustomCoverUri = null
+                        tagEditorTargetTrack = editTarget
+                    },
+                    onOpenAlbum = { albumName ->
+                        activeNowPlayingTab = null
+                        safePopBackStack()
+                        navController.navigate(Route.AlbumDetail(albumName))
+                    },
+                    onOpenArtist = { artistName ->
+                        activeNowPlayingTab = null
+                        safePopBackStack()
+                        requestedArtistDrilldown = artistName
+                        navController.navigate(Route.Albums) {
+                            popUpTo(navController.graph.findStartDestination().id) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    }
+                )
+            }
+        }
+
         // Full-screen Immersive Synced & Embedded Lyrics overlay (Spotify style)
         AnimatedVisibility(
             visible = lyricsTargetTrack != null,
@@ -1384,6 +1688,7 @@ fun SonoraApp(
                         pickLrcFileLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
                     },
                     onDismiss = {
+                        openLyricsTranslateOnStart = false
                         lyricsTargetTrack = null
                         viewModel.resetLyricsTranslation()
                     },
@@ -1516,9 +1821,177 @@ fun SonoraApp(
                             includeTrans,
                             initialPos
                         )
-                    }
+                    },
+                    hasDeepSeekApiKey = deepSeekApiKey.isNotBlank(),
+                    onOpenTranslatorSettings = {
+                        openLyricsTranslateOnStart = false
+                        lyricsTargetTrack = null
+                        viewModel.resetLyricsTranslation()
+                        requestedSettingsTranslatorFocus = true
+                        navController.navigate(Route.Settings) {
+                            launchSingleTop = true
+                        }
+                    },
+                    openTranslateMenuOnStart = openLyricsTranslateOnStart
                 )
             }
+        }
+
+        // Fixed full-screen Queue overlay
+        if (showQueueSheet) {
+            QueueBottomSheet(
+                playbackState = playbackState,
+                onDismiss = { showQueueSheet = false },
+                onSelectIndex = viewModel::skipToQueueIndex,
+                onRemoveIndex = viewModel::removeFromQueue,
+                onMoveItem = viewModel::moveQueueItem
+            )
+        }
+
+        // Fixed full-screen Track & Album Metadata overlay
+        metadataTargetTrack?.let { target ->
+            TrackMetadataBottomSheet(
+                track = target,
+                metadata = loadedTrackMetadata,
+                isLoading = isLoadingMetadata,
+                onDismiss = { metadataTargetTrack = null }
+            )
+        }
+
+        // Fixed full-screen Equalizer & DSP Audio Settings overlay
+        if (showEqualizerSheet) {
+            EqualizerAndDspSheet(
+                settings = audioSettings,
+                bands = eqBands,
+                onUpdateSettings = { viewModel.updateAudioSettings(it, immediate = true) },
+                onUpdateSettingsThrottled = { updated, immediate ->
+                    viewModel.updateAudioSettings(updated, immediate = immediate)
+                },
+                customProfiles = customEqProfiles,
+                onSaveCustomProfile = viewModel::saveCustomEqProfile,
+                onDeleteCustomProfile = viewModel::deleteCustomEqProfile,
+                onDismiss = { showEqualizerSheet = false },
+                onImportAutoEqTxt = {
+                    importAutoEqTxtLauncher.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
+                }
+            )
+        }
+
+        // Fixed full-screen Folders & SD Card Manager overlay
+        if (showFoldersSheet) {
+            FoldersExclusionSheet(
+                folders = uiState.folders,
+                onToggleExclude = viewModel::toggleFolderExclusion,
+                onDismiss = { showFoldersSheet = false },
+                sdCardFolders = uiState.sdCardFolders,
+                removingSdFolders = uiState.removingSdFolderUris,
+                onAddSdCardFolder = { openSdFolderLauncher.launch(null) },
+                onRemoveSdCardFolder = viewModel::removeSdCardFolder
+            )
+        }
+
+        // Fixed full-screen About & Credits overlay
+        if (showCreditsSheet) {
+            CreditsBottomSheet(
+                onDismiss = { showCreditsSheet = false }
+            )
+        }
+
+        // Full-screen Appearance & Color Customization overlay
+        if (showAppearanceSheet) {
+            AppearanceCustomizationSheet(
+                appearance = appearancePreferences,
+                onUpdateAppearance = viewModel::updateAppearancePreferences,
+                onSelectPreset = { preset -> viewModel.selectThemePreset(preset, systemDark) },
+                onResetToDefaults = viewModel::resetAppearanceToDefaults,
+                onDismiss = { showAppearanceSheet = false }
+            )
+        }
+
+        // In-app Tag, Filename & Cover Editor overlay (uses zero-permission Photo Picker)
+        tagEditorTargetTrack?.let { target ->
+            TagEditorBottomSheet(
+                track = target,
+                pickedArtworkUri = pickedCustomCoverUri,
+                onPickCoverImage = {
+                    pickCoverImageLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onClearCustomCover = { pickedCustomCoverUri = null },
+                onSave = { fileNameBase, title, artist, album, albumArtist, genre, year, trackNum, artworkUri ->
+                    val request = TrackTagEditRequest(
+                        track = target,
+                        newFileNameBase = fileNameBase,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        albumArtist = albumArtist,
+                        genre = genre,
+                        year = year,
+                        trackNumber = trackNum,
+                        customArtworkUri = artworkUri
+                    )
+                    coroutineScope.launch {
+                        val outcome = viewModel.commitPhysicalTagEdit(request)
+                        if (outcome is PhysicalTagEditOutcome.NeedsWritePermission) {
+                            pendingTagWriteRequest = request
+                            val launched = runCatching {
+                                writeTagsLauncher.launch(IntentSenderRequest.Builder(outcome.intentSender).build())
+                            }.isSuccess
+                            if (!launched) {
+                                pendingTagWriteRequest = null
+                                viewModel.notifyMessage("No se pudo abrir la solicitud de permiso de escritura")
+                            }
+                        }
+                    }
+                },
+                onDismiss = {
+                    tagEditorTargetTrack = null
+                    pickedCustomCoverUri = null
+                },
+                onSearchDeezerTags = viewModel::searchDeezerTagSuggestions,
+                onResolveDeezerTagSuggestion = viewModel::resolveDeezerTagSuggestion,
+                onApplyDeezerArtworkUri = { localUri ->
+                    if (!localUri.isNullOrBlank()) {
+                        pickedCustomCoverUri = localUri
+                    }
+                }
+            )
+        }
+
+        if (batchAutoTagState.isVisible) {
+            BatchAutoTagSheet(
+                uiState = batchAutoTagState,
+                onToggleOnlyMissing = viewModel::setBatchAutoTagOnlyMissing,
+                onToggleOverwriteArtwork = viewModel::setBatchAutoTagOverwriteArtwork,
+                onStart = viewModel::startBatchAutoTag,
+                onCancel = viewModel::cancelBatchAutoTag,
+                onDismiss = viewModel::dismissBatchAutoTag
+            )
+        }
+
+        if (batchLyricsState.isVisible) {
+            BatchLyricsSheet(
+                uiState = batchLyricsState,
+                hasDownloadedExportableLyrics = downloadedLrcExportCount > 0,
+                onToggleSyncedOnly = viewModel::setBatchLyricsSyncedOnly,
+                onToggleOverwrite = viewModel::setBatchLyricsOverwrite,
+                onStart = viewModel::startBatchLyrics,
+                onCancel = viewModel::cancelBatchLyrics,
+                onExportToFolder = { exportBatchLrcFolderLauncher.launch(null) },
+                onDismiss = viewModel::dismissBatchLyrics
+            )
+        }
+
+        if (replayGainScanState.isVisible) {
+            ReplayGainScanSheet(
+                uiState = replayGainScanState,
+                onToggleOnlyMissing = viewModel::setReplayGainScanOnlyMissing,
+                onStart = viewModel::startReplayGainScan,
+                onCancel = viewModel::cancelReplayGainScan,
+                onDismiss = viewModel::dismissReplayGainScan
+            )
         }
 
         // Native 9:16 Video (.mp4) & Image (.png) Lyrics / Snippet Share overlay
@@ -1560,7 +2033,6 @@ fun SonoraApp(
                                 snackbarHostState.showSnackbar("No se encontró una aplicación para compartir el archivo")
                             }
                         }
-                        viewModel.resetShareExportState()
                     },
                     onDismiss = {
                         val shouldResume = resumeMainAfterShare
@@ -1570,7 +2042,11 @@ fun SonoraApp(
                         shareSnippetTranslatedLyrics = null
                         viewModel.cancelLyricsShareExport()
                         viewModel.restoreMainAfterSharePreview(shouldResume)
-                    }
+                    },
+                    isSavingToDevice = isSavingShareClip,
+                    savedToDeviceNotice = savedShareClipNotice,
+                    onSaveToDevice = viewModel::saveShareClipToDevice,
+                    onResetExport = viewModel::resetShareExportState
                 )
             }
         }
@@ -1594,7 +2070,7 @@ fun SonoraApp(
         )
     }
 
-    // Add single or multiple tracks to playlist bottom sheet
+    // Add single or multiple tracks to playlist dialog
     if (tracksToAddToPlaylist.isNotEmpty()) {
         val batch = tracksToAddToPlaylist
         BatchAddToPlaylistBottomSheet(
@@ -1613,128 +2089,17 @@ fun SonoraApp(
         )
     }
 
-    // Queue sheet
-    if (showQueueSheet) {
-        QueueBottomSheet(
-            playbackState = playbackState,
-            onDismiss = { showQueueSheet = false },
-            onSelectIndex = viewModel::skipToQueueIndex,
-            onRemoveIndex = viewModel::removeFromQueue,
-            onMoveItem = viewModel::moveQueueItem
-        )
-    }
-
-    // Track & Album Metadata sheet
-    metadataTargetTrack?.let { target ->
-        TrackMetadataBottomSheet(
-            track = target,
-            metadata = loadedTrackMetadata,
-            isLoading = isLoadingMetadata,
-            onDismiss = { metadataTargetTrack = null }
-        )
-    }
-
-    // Equalizer & DSP Audio Settings sheet
-    if (showEqualizerSheet) {
-        EqualizerAndDspSheet(
-            settings = audioSettings,
-            bands = eqBands,
-            onUpdateSettings = { viewModel.updateAudioSettings(it, immediate = true) },
-            onUpdateSettingsThrottled = { updated, immediate ->
-                viewModel.updateAudioSettings(updated, immediate = immediate)
-            },
-            customProfiles = customEqProfiles,
-            onSaveCustomProfile = viewModel::saveCustomEqProfile,
-            onDeleteCustomProfile = viewModel::deleteCustomEqProfile,
-            onDismiss = { showEqualizerSheet = false }
-        )
-    }
-
-    // Sleep Timer sheet
+    // Sleep Timer dialog
     if (showSleepTimerSheet) {
+        val remainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
+        val stopAfterCurrent by viewModel.stopAfterCurrentTrack.collectAsStateWithLifecycle()
         SleepTimerSheet(
-            remainingMs = sleepTimerRemainingMs,
-            stopAfterCurrentTrack = stopAfterCurrentTrack,
+            remainingMs = remainingMs,
+            stopAfterCurrentTrack = stopAfterCurrent,
             onSelectMinutes = { mins -> viewModel.startSleepTimer(mins, afterCurrentTrack = false) },
             onSelectAfterTrack = { viewModel.startSleepTimer(null, afterCurrentTrack = true) },
             onCancelTimer = viewModel::cancelSleepTimer,
             onDismiss = { showSleepTimerSheet = false }
-        )
-    }
-
-    // Folders & SD Card Manager sheet
-    if (showFoldersSheet) {
-        FoldersExclusionSheet(
-            folders = uiState.folders,
-            onToggleExclude = viewModel::toggleFolderExclusion,
-            onDismiss = { showFoldersSheet = false },
-            sdCardFolders = uiState.sdCardFolders,
-            removingSdFolders = uiState.removingSdFolderUris,
-            onAddSdCardFolder = { openSdFolderLauncher.launch(null) },
-            onRemoveSdCardFolder = viewModel::removeSdCardFolder
-        )
-    }
-
-    // Non-intrusive Credits sheet
-    if (showCreditsSheet) {
-        CreditsBottomSheet(
-            onDismiss = { showCreditsSheet = false }
-        )
-    }
-
-    // Full-screen Appearance & Color Customization sheet
-    if (showAppearanceSheet) {
-        AppearanceCustomizationSheet(
-            appearance = appearancePreferences,
-            onUpdateAppearance = viewModel::updateAppearancePreferences,
-            onSelectPreset = { preset -> viewModel.selectThemePreset(preset, systemDark) },
-            onResetToDefaults = viewModel::resetAppearanceToDefaults,
-            onDismiss = { showAppearanceSheet = false }
-        )
-    }
-
-    // In-app Tag, Filename & Cover Editor sheet (uses zero-permission Photo Picker)
-    tagEditorTargetTrack?.let { target ->
-        TagEditorBottomSheet(
-            track = target,
-            pickedArtworkUri = pickedCustomCoverUri,
-            onPickCoverImage = {
-                pickCoverImageLauncher.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            },
-            onClearCustomCover = { pickedCustomCoverUri = null },
-            onSave = { fileNameBase, title, artist, album, albumArtist, genre, year, trackNum, artworkUri ->
-                val request = TrackTagEditRequest(
-                    track = target,
-                    newFileNameBase = fileNameBase,
-                    title = title,
-                    artist = artist,
-                    album = album,
-                    albumArtist = albumArtist,
-                    genre = genre,
-                    year = year,
-                    trackNumber = trackNum,
-                    customArtworkUri = artworkUri
-                )
-                coroutineScope.launch {
-                    val outcome = viewModel.commitPhysicalTagEdit(request)
-                    if (outcome is PhysicalTagEditOutcome.NeedsWritePermission) {
-                        pendingTagWriteRequest = request
-                        val launched = runCatching {
-                            writeTagsLauncher.launch(IntentSenderRequest.Builder(outcome.intentSender).build())
-                        }.isSuccess
-                        if (!launched) {
-                            pendingTagWriteRequest = null
-                            viewModel.notifyMessage("No se pudo abrir la solicitud de permiso de escritura")
-                        }
-                    }
-                }
-            },
-            onDismiss = {
-                tagEditorTargetTrack = null
-                pickedCustomCoverUri = null
-            }
         )
     }
 
@@ -2197,7 +2562,12 @@ fun GlobalSearchOverlay(
                                             text = album.albumName,
                                             style = MaterialTheme.typography.titleSmall,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
                                         )
                                         Text(
                                             text = "${album.artist.ifBlank { "Álbum" }} · ${album.tracks.size} pistas",
@@ -2258,7 +2628,12 @@ fun GlobalSearchOverlay(
                                             text = artist.artistName,
                                             style = MaterialTheme.typography.titleSmall,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
                                         )
                                         Text(
                                             text = "${artist.albumCount} álbumes · ${artist.tracks.size} canciones",
@@ -2310,7 +2685,12 @@ fun GlobalSearchOverlay(
                                             text = playlist.name,
                                             style = MaterialTheme.typography.titleSmall,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
                                         )
                                         Text(
                                             text = "${playlist.trackCount} canciones · ${formatDuration(playlist.totalDurationMs)}",

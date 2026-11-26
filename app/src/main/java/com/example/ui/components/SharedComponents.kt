@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -12,6 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -23,14 +25,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,7 +59,6 @@ import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.SkipNext
@@ -64,13 +69,11 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -81,7 +84,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -91,7 +93,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -106,6 +107,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
@@ -426,7 +429,12 @@ fun TrackRow(
                 style = MaterialTheme.typography.titleSmall,
                 color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                softWrap = false,
+                modifier = Modifier.basicMarquee(
+                    iterations = Int.MAX_VALUE,
+                    repeatDelayMillis = 1500,
+                    velocity = 30.dp
+                )
             )
             Spacer(modifier = Modifier.height(3.dp))
             Row(
@@ -662,8 +670,14 @@ fun MiniPlayerBar(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            softWrap = false,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(
+                                    iterations = Int.MAX_VALUE,
+                                    repeatDelayMillis = 1500,
+                                    velocity = 30.dp
+                                )
                         )
                         FormatBadge(format = track.format)
                     }
@@ -772,7 +786,6 @@ fun CreateOrEditPlaylistDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddToPlaylistBottomSheet(
     track: AudioTrack,
@@ -790,7 +803,6 @@ fun AddToPlaylistBottomSheet(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BatchAddToPlaylistBottomSheet(
     tracks: List<AudioTrack>,
@@ -807,102 +819,136 @@ fun BatchAddToPlaylistBottomSheet(
         "${tracks.size} canciones seleccionadas"
     }
 
-    ModalBottomSheet(
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Column(
+        BackHandler(onBack = onDismiss)
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .testTag("add_to_playlist_sheet")
+                .widthIn(max = 480.dp)
+                .heightIn(max = 560.dp)
+                .testTag("add_to_playlist_sheet"),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
         ) {
-            Text(
-                text = "Agregar a una lista",
-                style = MaterialTheme.typography.titleLarge
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-
-            OutlinedButton(
-                onClick = onCreateNewPlaylist,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("sheet_create_playlist_button")
+                    .padding(horizontal = 20.dp, vertical = 18.dp)
             ) {
-                Icon(Icons.Rounded.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Crear nueva lista")
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (playlists.isEmpty()) {
-                Text(
-                    text = "Todavía no tienes listas personalizadas.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 16.dp)
-                )
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(
-                        items = playlists,
-                        key = { it.id },
-                        contentType = { "playlist_row" }
-                    ) { playlist ->
-                        val existingCount = playlist.tracks.count { it.id in selectedIds }
-                        val statusLabel = when {
-                            tracks.size == 1 && existingCount == 1 ->
-                                "Ya incluida · ${playlist.trackCount} canciones"
-                            existingCount > 0 ->
-                                "$existingCount ya incluidas · ${playlist.trackCount} canciones"
-                            else -> "${playlist.trackCount} canciones"
-                        }
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onSelectPlaylist(playlist) }
-                                .testTag("sheet_playlist_item_${playlist.id}"),
-                            color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Agregar a una lista",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("close_add_to_playlist_button")
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar selección de lista")
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+
+                OutlinedButton(
+                    onClick = onCreateNewPlaylist,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("sheet_create_playlist_button")
+                ) {
+                    Icon(Icons.Rounded.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Crear nueva lista")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (playlists.isEmpty()) {
+                    Text(
+                        text = "Todavía no tienes listas personalizadas.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f, fill = false)
+                    ) {
+                        items(
+                            items = playlists,
+                            key = { it.id },
+                            contentType = { "playlist_row" }
+                        ) { playlist ->
+                            val existingCount = playlist.tracks.count { it.id in selectedIds }
+                            val statusLabel = when {
+                                tracks.size == 1 && existingCount == 1 ->
+                                    "Ya incluida · ${playlist.trackCount} canciones"
+                                existingCount > 0 ->
+                                    "$existingCount ya incluidas · ${playlist.trackCount} canciones"
+                                else -> "${playlist.trackCount} canciones"
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onSelectPlaylist(playlist) }
+                                    .testTag("sheet_playlist_item_${playlist.id}"),
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = RoundedCornerShape(14.dp)
                             ) {
-                                PlaylistMosaicCover(
-                                    artworkUris = playlist.artworkUris,
-                                    contentDescription = playlist.name,
-                                    cornerRadius = 10.dp,
-                                    modifier = Modifier.size(46.dp)
-                                )
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = playlist.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    PlaylistMosaicCover(
+                                        artworkUris = playlist.artworkUris,
+                                        contentDescription = playlist.name,
+                                        cornerRadius = 10.dp,
+                                        modifier = Modifier.size(46.dp)
                                     )
-                                    Text(
-                                        text = statusLabel,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (existingCount > 0) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = playlist.name,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
+                                        )
+                                        Text(
+                                            text = statusLabel,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (existingCount > 0) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -913,7 +959,6 @@ fun BatchAddToPlaylistBottomSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueueBottomSheet(
     playbackState: PlaybackUiState,
@@ -922,49 +967,30 @@ fun QueueBottomSheet(
     onRemoveIndex: (Int) -> Unit,
     onMoveItem: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> }
 ) {
+    BackHandler(onBack = onDismiss)
+
     val hasActiveIndex = playbackState.currentIndex in playbackState.queue.indices
     val queueOffset = if (hasActiveIndex) playbackState.currentIndex else 0
-    val visibleQueue = remember(playbackState.queue, queueOffset, hasActiveIndex) {
-        if (playbackState.queue.isEmpty()) emptyList()
-        else if (hasActiveIndex) playbackState.queue.subList(queueOffset, playbackState.queue.size).toList()
-        else playbackState.queue
-    }
-    val visibleEntries = remember(visibleQueue) {
-        val counts = HashMap<String, Int>(visibleQueue.size)
-        visibleQueue.map { track ->
-            val occ = (counts[track.id] ?: 0) + 1
-            counts[track.id] = occ
-            "${track.id}#$occ" to track
-        }
-    }
-
+    val visibleCount = if (playbackState.queue.isEmpty()) 0 else (playbackState.queue.size - queueOffset).coerceAtLeast(0)
     val queueListState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val showScrollToTop by remember {
         derivedStateOf { queueListState.firstVisibleItemIndex > 0 }
     }
 
-    val density = LocalDensity.current
-    val defaultItemHeightPx = with(density) { 64.dp.toPx() }
-    var measuredItemHeightPx by remember { mutableFloatStateOf(defaultItemHeightPx) }
-    var draggedVisualIndex by remember { mutableStateOf<Int?>(null) }
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-
-    val currentQueueOffset by rememberUpdatedState(queueOffset)
-    val currentVisibleSize by rememberUpdatedState(visibleQueue.size)
-    val currentHasActiveIndex by rememberUpdatedState(hasActiveIndex)
-    val currentOnMoveItem by rememberUpdatedState(onMoveItem)
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("queue_bottom_sheet")
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp)
-                .testTag("queue_bottom_sheet")
+                .padding(top = 12.dp, bottom = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -977,13 +1003,13 @@ fun QueueBottomSheet(
                         style = MaterialTheme.typography.titleLarge
                     )
                     val subtitleText = when {
-                        visibleQueue.isEmpty() -> "Sin canciones en cola"
+                        visibleCount == 0 -> "Sin canciones en cola"
                         hasActiveIndex -> {
-                            val upcomingCount = (visibleQueue.size - 1).coerceAtLeast(0)
+                            val upcomingCount = (visibleCount - 1).coerceAtLeast(0)
                             if (upcomingCount == 0) "Sonando ahora · Última canción"
                             else "Sonando ahora · $upcomingCount ${if (upcomingCount == 1) "siguiente" else "siguientes"}"
                         }
-                        else -> "${visibleQueue.size} ${if (visibleQueue.size == 1) "canción" else "canciones"} en cola"
+                        else -> "$visibleCount ${if (visibleCount == 1) "canción" else "canciones"} en cola"
                     }
                     Text(
                         text = subtitleText,
@@ -1012,7 +1038,9 @@ fun QueueBottomSheet(
                     }
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.minimumInteractiveComponentSize()
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("close_queue_button")
                     ) {
                         Icon(Icons.Rounded.Close, contentDescription = "Cerrar cola")
                     }
@@ -1023,199 +1051,255 @@ fun QueueBottomSheet(
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (visibleEntries.isEmpty()) {
-                Box(
+            QueueLazyList(
+                playbackState = playbackState,
+                onSelectIndex = onSelectIndex,
+                onRemoveIndex = onRemoveIndex,
+                onMoveItem = onMoveItem,
+                listState = queueListState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+fun QueueLazyList(
+    playbackState: PlaybackUiState,
+    onSelectIndex: (Int) -> Unit,
+    onRemoveIndex: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    onMoveItem: (fromIndex: Int, toIndex: Int) -> Unit = { _, _ -> },
+    listState: LazyListState = rememberLazyListState(),
+    contentPadding: PaddingValues = PaddingValues(vertical = 6.dp),
+    primaryTextColor: Color = MaterialTheme.colorScheme.onSurface,
+    secondaryTextColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
+    currentHighlightColor: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f),
+    draggingCardColor: Color = MaterialTheme.colorScheme.surfaceContainerHighest
+) {
+    val hasActiveIndex = playbackState.currentIndex in playbackState.queue.indices
+    val queueOffset = if (hasActiveIndex) playbackState.currentIndex else 0
+    val visibleQueue = remember(playbackState.queue, queueOffset, hasActiveIndex) {
+        if (playbackState.queue.isEmpty()) emptyList()
+        else if (hasActiveIndex) playbackState.queue.subList(queueOffset, playbackState.queue.size).toList()
+        else playbackState.queue
+    }
+    val visibleEntries = remember(visibleQueue) {
+        val counts = HashMap<String, Int>(visibleQueue.size)
+        visibleQueue.map { track ->
+            val occ = (counts[track.id] ?: 0) + 1
+            counts[track.id] = occ
+            "${track.id}#$occ" to track
+        }
+    }
+
+    val density = LocalDensity.current
+    val defaultItemHeightPx = with(density) { 64.dp.toPx() }
+    var measuredItemHeightPx by remember { mutableFloatStateOf(defaultItemHeightPx) }
+    var draggedVisualIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+
+    val currentQueueOffset by rememberUpdatedState(queueOffset)
+    val currentVisibleSize by rememberUpdatedState(visibleQueue.size)
+    val currentHasActiveIndex by rememberUpdatedState(hasActiveIndex)
+    val currentOnMoveItem by rememberUpdatedState(onMoveItem)
+
+    if (visibleEntries.isEmpty()) {
+        Box(
+            modifier = modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "La cola está vacía",
+                style = MaterialTheme.typography.bodyMedium,
+                color = secondaryTextColor
+            )
+        }
+    } else {
+        LazyColumn(
+            state = listState,
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = modifier.testTag("queue_lazy_column")
+        ) {
+            itemsIndexed(
+                items = visibleEntries,
+                key = { _, entry -> entry.first },
+                contentType = { _, _ -> "queue_track_row" }
+            ) { visualIndex, entry ->
+                val item = entry.second
+                val isCurrent = hasActiveIndex && visualIndex == 0
+                val actualIndex = queueOffset + visualIndex
+                val isDragging = draggedVisualIndex == visualIndex
+                val canReorder = !isCurrent && (if (hasActiveIndex) visibleQueue.size > 2 else visibleQueue.size > 1)
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = when {
+                        isCurrent -> currentHighlightColor
+                        isDragging -> draggingCardColor
+                        else -> Color.Transparent
+                    },
+                    border = if (isCurrent) {
+                        BorderStroke(1.dp, accentColor.copy(alpha = 0.5f))
+                    } else if (isDragging) {
+                        BorderStroke(1.dp, accentColor.copy(alpha = 0.7f))
+                    } else null,
+                    shadowElevation = if (isDragging) 6.dp else 0.dp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 32.dp),
-                    contentAlignment = Alignment.Center
+                        .zIndex(if (isDragging) 1f else 0f)
+                        .graphicsLayer {
+                            translationY = if (isDragging) dragOffsetY else 0f
+                            val scale = if (isDragging) 1.02f else 1f
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .onSizeChanged { size ->
+                            if (size.height > 0) {
+                                measuredItemHeightPx = size.height.toFloat()
+                            }
+                        }
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onSelectIndex(actualIndex) }
+                        .then(
+                            if (isCurrent) Modifier.testTag("queue_now_playing_item")
+                            else Modifier.testTag("queue_item_${item.id}_$visualIndex")
+                        )
                 ) {
-                    Text(
-                        text = "La cola está vacía",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    state = queueListState,
-                    contentPadding = PaddingValues(vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier.testTag("queue_lazy_column")
-                ) {
-                    itemsIndexed(
-                        items = visibleEntries,
-                        key = { _, entry -> entry.first },
-                        contentType = { _, _ -> "queue_track_row" }
-                    ) { visualIndex, entry ->
-                        val item = entry.second
-                        val isCurrent = hasActiveIndex && visualIndex == 0
-                        val actualIndex = queueOffset + visualIndex
-                        val isDragging = draggedVisualIndex == visualIndex
-                        val canReorder = !isCurrent && (if (hasActiveIndex) visibleQueue.size > 2 else visibleQueue.size > 1)
-
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = when {
-                                isCurrent -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f)
-                                isDragging -> MaterialTheme.colorScheme.surfaceContainerHighest
-                                else -> Color.Transparent
-                            },
-                            border = if (isCurrent) {
-                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
-                            } else if (isDragging) {
-                                BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-                            } else null,
-                            shadowElevation = if (isDragging) 6.dp else 0.dp,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .zIndex(if (isDragging) 1f else 0f)
-                                .graphicsLayer {
-                                    translationY = if (isDragging) dragOffsetY else 0f
-                                    val scale = if (isDragging) 1.02f else 1f
-                                    scaleX = scale
-                                    scaleY = scale
-                                }
-                                .onSizeChanged { size ->
-                                    if (size.height > 0) {
-                                        measuredItemHeightPx = size.height.toFloat()
-                                    }
-                                }
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { onSelectIndex(actualIndex) }
-                                .then(
-                                    if (isCurrent) Modifier.testTag("queue_now_playing_item")
-                                    else Modifier.testTag("queue_item_${item.id}_$visualIndex")
-                                )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier.width(28.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier.width(28.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (isCurrent) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.GraphicEq,
-                                            contentDescription = "Sonando ahora",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    } else {
-                                        Text(
-                                            text = "$visualIndex",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                AudioAlbumArtThumbnail(
-                                    audioUri = item.contentUri,
-                                    albumArtUri = item.albumArtUri,
-                                    contentDescription = item.title,
-                                    cornerRadius = 8.dp,
-                                    modifier = Modifier.size(42.dp)
+                            if (isCurrent) {
+                                Icon(
+                                    imageVector = Icons.Rounded.GraphicEq,
+                                    contentDescription = "Sonando ahora",
+                                    tint = accentColor,
+                                    modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    if (isCurrent) {
-                                        Text(
-                                            text = "SONANDO AHORA",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        text = item.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        FormatBadge(format = item.format)
-                                        Text(
-                                            text = item.artist,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                if (!isCurrent) {
-                                    if (canReorder) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(40.dp)
-                                                .pointerInput(entry.first) {
-                                                    detectDragGestures(
-                                                        onDragStart = {
-                                                            draggedVisualIndex = visualIndex
-                                                            dragOffsetY = 0f
-                                                        },
-                                                        onDragEnd = {
-                                                            draggedVisualIndex = null
-                                                            dragOffsetY = 0f
-                                                        },
-                                                        onDragCancel = {
-                                                            draggedVisualIndex = null
-                                                            dragOffsetY = 0f
-                                                        },
-                                                        onDrag = { change, dragAmount ->
-                                                            change.consume()
-                                                            val activeVisual = draggedVisualIndex ?: return@detectDragGestures
-                                                            dragOffsetY += dragAmount.y
-                                                            val stepPx = measuredItemHeightPx.coerceAtLeast(48f)
-                                                            val steps = (dragOffsetY / stepPx).toInt()
-                                                            if (steps != 0) {
-                                                                val minIdx = if (currentHasActiveIndex) 1 else 0
-                                                                val maxIdx = (currentVisibleSize - 1).coerceAtLeast(minIdx)
-                                                                val targetVisual = (activeVisual + steps).coerceIn(minIdx, maxIdx)
-                                                                if (targetVisual != activeVisual) {
-                                                                    currentOnMoveItem(
-                                                                        currentQueueOffset + activeVisual,
-                                                                        currentQueueOffset + targetVisual
-                                                                    )
-                                                                    dragOffsetY -= (targetVisual - activeVisual) * stepPx
-                                                                    draggedVisualIndex = targetVisual
-                                                                }
-                                                            }
+                            } else {
+                                Text(
+                                    text = "$visualIndex",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = secondaryTextColor
+                                )
+                            }
+                        }
+                        AudioAlbumArtThumbnail(
+                            audioUri = item.contentUri,
+                            albumArtUri = item.albumArtUri,
+                            contentDescription = item.title,
+                            cornerRadius = 8.dp,
+                            modifier = Modifier.size(42.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            if (isCurrent) {
+                                Text(
+                                    text = "SONANDO AHORA",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = accentColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = if (isCurrent) accentColor else primaryTextColor,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier.basicMarquee(
+                                    iterations = Int.MAX_VALUE,
+                                    repeatDelayMillis = 1500,
+                                    velocity = 30.dp
+                                )
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FormatBadge(format = item.format)
+                                Text(
+                                    text = item.artist,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = secondaryTextColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (!isCurrent) {
+                            if (canReorder) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .pointerInput(entry.first) {
+                                            detectDragGestures(
+                                                onDragStart = {
+                                                    draggedVisualIndex = visualIndex
+                                                    dragOffsetY = 0f
+                                                },
+                                                onDragEnd = {
+                                                    draggedVisualIndex = null
+                                                    dragOffsetY = 0f
+                                                },
+                                                onDragCancel = {
+                                                    draggedVisualIndex = null
+                                                    dragOffsetY = 0f
+                                                },
+                                                onDrag = { change, dragAmount ->
+                                                    change.consume()
+                                                    val activeVisual = draggedVisualIndex ?: return@detectDragGestures
+                                                    dragOffsetY += dragAmount.y
+                                                    val stepPx = measuredItemHeightPx.coerceAtLeast(48f)
+                                                    val steps = (dragOffsetY / stepPx).toInt()
+                                                    if (steps != 0) {
+                                                        val minIdx = if (currentHasActiveIndex) 1 else 0
+                                                        val maxIdx = (currentVisibleSize - 1).coerceAtLeast(minIdx)
+                                                        val targetVisual = (activeVisual + steps).coerceIn(minIdx, maxIdx)
+                                                        if (targetVisual != activeVisual) {
+                                                            currentOnMoveItem(
+                                                                currentQueueOffset + activeVisual,
+                                                                currentQueueOffset + targetVisual
+                                                            )
+                                                            dragOffsetY -= (targetVisual - activeVisual) * stepPx
+                                                            draggedVisualIndex = targetVisual
                                                         }
-                                                    )
+                                                    }
                                                 }
-                                                .testTag("queue_drag_handle_$visualIndex"),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.DragHandle,
-                                                contentDescription = "Reordenar ${item.title}",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                    }
-                                    IconButton(
-                                        onClick = { onRemoveIndex(actualIndex) },
-                                        modifier = Modifier
-                                            .minimumInteractiveComponentSize()
-                                            .testTag("queue_remove_button_$visualIndex")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.DeleteOutline,
-                                            contentDescription = "Quitar de la cola",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                                        .testTag("queue_drag_handle_$visualIndex"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DragHandle,
+                                        contentDescription = "Reordenar ${item.title}",
+                                        tint = secondaryTextColor
+                                    )
                                 }
+                            }
+                            IconButton(
+                                onClick = { onRemoveIndex(actualIndex) },
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("queue_remove_button_$visualIndex")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteOutline,
+                                    contentDescription = "Quitar de la cola",
+                                    tint = secondaryTextColor
+                                )
                             }
                         }
                     }
@@ -1225,7 +1309,6 @@ fun QueueBottomSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackMetadataBottomSheet(
     track: AudioTrack,
@@ -1233,25 +1316,22 @@ fun TrackMetadataBottomSheet(
     isLoading: Boolean,
     onDismiss: () -> Unit
 ) {
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(
-        skipPartiallyExpanded = true
-    )
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+    BackHandler(onBack = onDismiss)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxSize()
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .testTag("track_metadata_sheet"),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
@@ -1266,8 +1346,13 @@ fun TrackMetadataBottomSheet(
                     Text(
                         text = metadata?.title ?: track.title,
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            repeatDelayMillis = 1500,
+                            velocity = 30.dp
+                        )
                     )
                     Text(
                         text = metadata?.artist ?: track.artist,
@@ -1279,61 +1364,98 @@ fun TrackMetadataBottomSheet(
                     Spacer(modifier = Modifier.height(4.dp))
                     FormatBadge(format = track.format)
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("close_metadata_button")
+                ) {
                     Icon(Icons.Rounded.Close, contentDescription = "Cerrar metadatos")
                 }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-            if (isLoading && metadata == null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                }
-            } else {
-                val resolvedTitle = metadata?.title ?: track.title
-                val resolvedArtist = metadata?.artist ?: track.artist
-                val resolvedAlbum = metadata?.album ?: track.album
-                val resolvedAlbumArtist = metadata?.albumArtist?.takeIf { it.isNotBlank() }
-                    ?: track.albumArtist.takeIf { it.isNotBlank() }
-                    ?: resolvedArtist
-                val resolvedGenre = metadata?.genre?.takeIf { it.isNotBlank() } ?: track.genre
-                val resolvedYear = (metadata?.year ?: track.year).takeIf { it > 0 }?.toString()
-                val resolvedTrackNum = (metadata?.trackNumber ?: track.trackNumber).takeIf { it > 0 }?.toString()
-                val resolvedDuration = formatDuration(metadata?.durationMs ?: track.durationMs)
-                val techBadge = metadata?.techSpecs?.formatBadge(track.format) ?: track.format.label
-                val sizeStr = formatFileSize(track.sizeBytes)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .testTag("track_metadata_sheet"),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (isLoading && metadata == null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                } else {
+                    val resolvedTitle = metadata?.title ?: track.title
+                    val resolvedArtist = metadata?.artist ?: track.artist
+                    val resolvedAlbum = metadata?.album ?: track.album
+                    val resolvedAlbumArtist = metadata?.albumArtist?.takeIf { it.isNotBlank() }
+                        ?: track.albumArtist.takeIf { it.isNotBlank() }
+                        ?: resolvedArtist
+                    val resolvedGenre = metadata?.genre?.takeIf { it.isNotBlank() } ?: track.genre
+                    val resolvedYear = (metadata?.year ?: track.year).takeIf { it > 0 }?.toString()
+                    val resolvedTrackNum = (metadata?.trackNumber ?: track.trackNumber).takeIf { it > 0 }?.toString()
+                    val resolvedDuration = formatDuration(metadata?.durationMs ?: track.durationMs)
+                    val techBadge = metadata?.techSpecs?.formatBadge(track.format) ?: track.format.label
+                    val sizeStr = formatFileSize(track.sizeBytes)
 
-                MetadataRow(label = "Título", value = resolvedTitle)
-                MetadataRow(label = "Artista", value = resolvedArtist)
-                MetadataRow(label = "Álbum", value = resolvedAlbum)
-                MetadataRow(label = "Artista del álbum", value = resolvedAlbumArtist)
-                if (resolvedGenre.isNotBlank()) {
-                    MetadataRow(label = "Género", value = resolvedGenre)
+                    MetadataRow(label = "Título", value = resolvedTitle)
+                    MetadataRow(label = "Artista", value = resolvedArtist)
+                    MetadataRow(label = "Álbum", value = resolvedAlbum)
+                    MetadataRow(label = "Artista del álbum", value = resolvedAlbumArtist)
+                    if (resolvedGenre.isNotBlank()) {
+                        MetadataRow(label = "Género", value = resolvedGenre)
+                    }
+                    if (resolvedYear != null) {
+                        MetadataRow(label = "Año", value = resolvedYear)
+                    }
+                    if (resolvedTrackNum != null) {
+                        MetadataRow(label = "N.º de pista", value = resolvedTrackNum)
+                    }
+                    MetadataRow(label = "Duración", value = resolvedDuration)
+                    MetadataRow(label = "Calidad y formato", value = techBadge)
+                    if (sizeStr.isNotEmpty()) {
+                        MetadataRow(label = "Tamaño", value = sizeStr)
+                    }
+                    MetadataRow(label = "Carpeta", value = track.folderName)
+                    MetadataRow(
+                        label = "Carátula incrustada",
+                        value = if (metadata?.hasEmbeddedArtwork == true || track.albumArtUri != null) {
+                            "Disponible"
+                        } else "No detectada"
+                    )
+                    val outputDevice = com.example.playback.rememberAudioOutputDeviceInfo()
+                    MetadataRow(
+                        label = "Salida activa",
+                        value = outputDevice.shortBadgeLabel
+                    )
+                    if (outputDevice.supportedSampleRatesHz.isNotEmpty()) {
+                        val ratesSummary = outputDevice.supportedSampleRatesHz
+                            .takeLast(4)
+                            .joinToString(" / ") { hz ->
+                                if (hz % 1000 == 0) "${hz / 1000} kHz" else "${hz / 1000.0} kHz"
+                            }
+                        MetadataRow(
+                            label = "Frecuencias DAC",
+                            value = ratesSummary
+                        )
+                    }
+                    outputDevice.maxBitDepthLabel?.let { depth ->
+                        MetadataRow(
+                            label = "Profundidad salida",
+                            value = depth
+                        )
+                    }
                 }
-                if (resolvedYear != null) {
-                    MetadataRow(label = "Año", value = resolvedYear)
-                }
-                if (resolvedTrackNum != null) {
-                    MetadataRow(label = "N.º de pista", value = resolvedTrackNum)
-                }
-                MetadataRow(label = "Duración", value = resolvedDuration)
-                MetadataRow(label = "Calidad y formato", value = techBadge)
-                if (sizeStr.isNotEmpty()) {
-                    MetadataRow(label = "Tamaño", value = sizeStr)
-                }
-                MetadataRow(label = "Carpeta", value = track.folderName)
-                MetadataRow(
-                    label = "Carátula incrustada",
-                    value = if (metadata?.hasEmbeddedArtwork == true || track.albumArtUri != null) {
-                        "Disponible"
-                    } else "No detectada"
-                )
             }
         }
     }

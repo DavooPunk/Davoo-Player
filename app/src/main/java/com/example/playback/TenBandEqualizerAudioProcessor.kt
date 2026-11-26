@@ -31,7 +31,7 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
         val a2: Double
     )
 
-    private data class EqSnapshot(
+    private class EqSnapshot(
         val enabled: Boolean,
         val isBypass: Boolean,
         val preampLinear: Double,
@@ -50,6 +50,13 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
             y1.fill(0.0)
             y2.fill(0.0)
         }
+
+        fun resetBand(bandIdx: Int) {
+            x1[bandIdx] = 0.0
+            x2[bandIdx] = 0.0
+            y1[bandIdx] = 0.0
+            y2[bandIdx] = 0.0
+        }
     }
 
     @Volatile
@@ -62,7 +69,14 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
 
     private var appliedSampleRateHz: Int = 0
     private var appliedGainsMb: List<Int> = emptyList()
-    private var coeffsByBand: Array<FilterCoeffs> = emptyArray()
+    private var coeffsBuilt: Boolean = false
+    private var activeCount: Int = 0
+    private val activeBandIndices = IntArray(BAND_COUNT)
+    private val activeB0 = DoubleArray(BAND_COUNT)
+    private val activeB1 = DoubleArray(BAND_COUNT)
+    private val activeB2 = DoubleArray(BAND_COUNT)
+    private val activeA1 = DoubleArray(BAND_COUNT)
+    private val activeA2 = DoubleArray(BAND_COUNT)
     private var channelStates: Array<ChannelBiquadState> = emptyArray()
 
     fun updateSettings(
@@ -107,7 +121,8 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
 
     override fun onReset() {
         channelStates = emptyArray()
-        coeffsByBand = emptyArray()
+        coeffsBuilt = false
+        activeCount = 0
         appliedSampleRateHz = 0
         appliedGainsMb = emptyList()
     }
@@ -134,8 +149,9 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
         }
 
         rebuildCoeffsIfNeeded(sampleRate, snap.bandGainsMb, force = false)
-        val coeffs = coeffsByBand
         val preamp = snap.preampLinear
+        val count = activeCount
+        val states = channelStates
 
         when (inputAudioFormat.encoding) {
             C.ENCODING_PCM_16BIT -> {
@@ -143,7 +159,8 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
                 while (inputBuffer.remaining() >= frameBytes) {
                     for (ch in 0 until channels) {
                         val rawSample = inputBuffer.short.toDouble() / 32768.0
-                        val processed = processSample(rawSample * preamp, channelStates[ch], coeffs)
+                        val scaled = rawSample * preamp
+                        val processed = if (count == 0) scaled else processSample(scaled, states[ch], count)
                         val clamped = softLimit(processed)
                         val outShort = (clamped * 32767.0).roundToInt()
                             .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
@@ -158,7 +175,8 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
                 while (inputBuffer.remaining() >= frameBytes) {
                     for (ch in 0 until channels) {
                         val rawSample = inputBuffer.float.toDouble()
-                        val processed = processSample(rawSample * preamp, channelStates[ch], coeffs)
+                        val scaled = rawSample * preamp
+                        val processed = if (count == 0) scaled else processSample(scaled, states[ch], count)
                         val clamped = softLimit(processed).toFloat()
                         outputBuffer.putFloat(clamped)
                     }
@@ -175,28 +193,39 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
     private fun processSample(
         input: Double,
         state: ChannelBiquadState,
-        coeffs: Array<FilterCoeffs>
+        count: Int
     ): Double {
         var x = input
-        for (b in coeffs.indices) {
-            val c = coeffs[b]
-            val y = c.b0 * x + c.b1 * state.x1[b] + c.b2 * state.x2[b] -
-                c.a1 * state.y1[b] - c.a2 * state.y2[b]
-            state.x2[b] = state.x1[b]
-            state.x1[b] = x
-            state.y2[b] = state.y1[b]
-            state.y1[b] = if (y.isFinite()) y else 0.0
-            x = state.y1[b]
+        val x1Arr = state.x1
+        val x2Arr = state.x2
+        val y1Arr = state.y1
+        val y2Arr = state.y2
+        for (i in 0 until count) {
+            val b = activeBandIndices[i]
+            val sx1 = x1Arr[b]
+            val sx2 = x2Arr[b]
+            val sy1 = y1Arr[b]
+            val sy2 = y2Arr[b]
+            val y = activeB0[i] * x + activeB1[i] * sx1 + activeB2[i] * sx2 -
+                activeA1[i] * sy1 - activeA2[i] * sy2
+            x2Arr[b] = sx1
+            x1Arr[b] = x
+            y2Arr[b] = sy1
+            val safeY = if (y.isFinite()) y else 0.0
+            y1Arr[b] = safeY
+            x = safeY
         }
         return x
     }
 
     private fun softLimit(sample: Double): Double {
-        return when {
-            sample > 0.98 -> 0.98 + 0.02 * tanh((sample - 0.98) * 10.0)
-            sample < -0.98 -> -0.98 + 0.02 * tanh((sample + 0.98) * 10.0)
-            else -> sample
-        }.coerceIn(-1.0, 1.0)
+        return if (sample > 0.98) {
+            (0.98 + 0.02 * tanh((sample - 0.98) * 10.0)).coerceAtMost(1.0)
+        } else if (sample < -0.98) {
+            (-0.98 + 0.02 * tanh((sample + 0.98) * 10.0)).coerceAtLeast(-1.0)
+        } else {
+            sample
+        }
     }
 
     private fun rebuildCoeffsIfNeeded(
@@ -204,20 +233,36 @@ class TenBandEqualizerAudioProcessor : BaseAudioProcessor() {
         gainsMb: List<Int>,
         force: Boolean
     ) {
-        if (!force && sampleRateHz == appliedSampleRateHz && gainsMb == appliedGainsMb && coeffsByBand.size == BAND_COUNT) {
+        if (!force && sampleRateHz == appliedSampleRateHz && gainsMb == appliedGainsMb && coeffsBuilt) {
             return
         }
         appliedSampleRateHz = sampleRateHz
         appliedGainsMb = gainsMb
-        coeffsByBand = Array(BAND_COUNT) { idx ->
-            val fc = TEN_BAND_CENTERS_HZ[idx].toDouble().coerceAtMost(sampleRateHz * 0.45)
+        var nextActiveCount = 0
+        for (idx in 0 until BAND_COUNT) {
             val gainDb = gainsMb.getOrElse(idx) { 0 } / 100.0
-            when (idx) {
+            if (kotlin.math.abs(gainDb) < 0.01) {
+                for (chState in channelStates) {
+                    chState.resetBand(idx)
+                }
+                continue
+            }
+            val fc = TEN_BAND_CENTERS_HZ[idx].toDouble().coerceAtMost(sampleRateHz * 0.45)
+            val c = when (idx) {
                 0 -> computeLowShelfCoeffs(sampleRateHz.toDouble(), fc, gainDb)
                 BAND_COUNT - 1 -> computeHighShelfCoeffs(sampleRateHz.toDouble(), fc, gainDb)
                 else -> computePeakingCoeffs(sampleRateHz.toDouble(), fc, Q_PEAK, gainDb)
             }
+            activeBandIndices[nextActiveCount] = idx
+            activeB0[nextActiveCount] = c.b0
+            activeB1[nextActiveCount] = c.b1
+            activeB2[nextActiveCount] = c.b2
+            activeA1[nextActiveCount] = c.a1
+            activeA2[nextActiveCount] = c.a2
+            nextActiveCount++
         }
+        activeCount = nextActiveCount
+        coeffsBuilt = true
     }
 
     private fun computePeakingCoeffs(

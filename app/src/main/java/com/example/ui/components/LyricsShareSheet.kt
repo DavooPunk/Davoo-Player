@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -12,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,16 +40,19 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -60,12 +66,14 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -74,13 +82,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -100,7 +112,9 @@ import com.example.share.LyricsShareClipCalculator
 import com.example.share.LyricsShareClipSpec
 import com.example.share.ShareCardStyle
 import com.example.share.ShareExportUiState
+import com.example.share.ShareLyricsTextSize
 import com.example.share.ShareOutputFormat
+import com.example.share.ShareVideoResolution
 import com.example.ui.theme.ArtworkColorExtractor
 import com.example.ui.theme.CopperAmber
 import com.example.ui.theme.ThemePalette
@@ -126,7 +140,11 @@ fun LyricsShareSheet(
     onStartExport: (LyricsShareClipSpec) -> Unit,
     onCancelExport: () -> Unit,
     onExportReady: (ShareExportUiState.Ready) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    isSavingToDevice: Boolean = false,
+    savedToDeviceNotice: String? = null,
+    onSaveToDevice: (ShareExportUiState.Ready) -> Unit = {},
+    onResetExport: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val isLossless = track.format == AudioFormat.FLAC || track.format == AudioFormat.WAV
@@ -172,11 +190,13 @@ fun LyricsShareSheet(
 
     var selectedStyle by remember(track.id) { mutableStateOf(ShareCardStyle.DYNAMIC_ARTWORK) }
     var selectedFormat by remember(track.id) { mutableStateOf(ShareOutputFormat.VIDEO_MP4) }
+    var selectedTextSize by remember(track.id) { mutableStateOf(ShareLyricsTextSize.LARGE) }
+    var selectedResolution by remember(track.id) { mutableStateOf(ShareVideoResolution.FHD_1080P) }
     var includeTranslation by remember(track.id) {
         mutableStateOf(initialIncludeTranslation && hasTranslationAvailable)
     }
 
-    // Synced range state (1-6 consecutive lines)
+    // Synced range state (unlimited lines up to 1:30 duration)
     var syncedRange by remember(track.id, lyrics) {
         mutableStateOf(
             if (syncedLinesExist && lyrics != null) {
@@ -248,6 +268,8 @@ fun LyricsShareSheet(
         hasTranslationAvailable,
         selectedStyle,
         selectedFormat,
+        selectedTextSize,
+        selectedResolution,
         accentColor
     ) {
         LyricsShareClipSpec(
@@ -260,7 +282,9 @@ fun LyricsShareSheet(
             includeTranslation = includeTranslation && hasTranslationAvailable,
             style = selectedStyle,
             format = selectedFormat,
-            dynamicAccentColorInt = accentColor.toArgb()
+            dynamicAccentColorInt = accentColor.toArgb(),
+            textSize = selectedTextSize,
+            videoResolution = selectedResolution
         )
     }
 
@@ -349,11 +373,7 @@ fun LyricsShareSheet(
         }
     }
 
-    LaunchedEffect(exportState) {
-        if (exportState is ShareExportUiState.Ready) {
-            onExportReady(exportState)
-        }
-    }
+    // Keep Ready state visible with Guardar en el dispositivo / Compartir buttons until dismissed or reset.
 
     val handleDismiss: () -> Unit = {
         if (isExportingActive) {
@@ -424,7 +444,7 @@ fun LyricsShareSheet(
                     border = BorderStroke(1.dp, cardHighlightAccent.copy(alpha = 0.45f))
                 ) {
                     Text(
-                        text = "${(clipDurationMs / 1000L).coerceAtLeast(1L)}s / 30s",
+                        text = "${formatDuration(clipDurationMs)} / 01:30",
                         style = MaterialTheme.typography.labelMedium,
                         color = cardHighlightAccent,
                         fontWeight = FontWeight.SemiBold,
@@ -491,9 +511,9 @@ fun LyricsShareSheet(
                     }
                 }
 
-                // 2. Output Format + Style + Optional Translation Toggle
-                item(key = "style_and_format") {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 2a. Output Format
+                item(key = "format_selector") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Formato de exportación",
                             style = MaterialTheme.typography.labelLarge,
@@ -537,7 +557,12 @@ fun LyricsShareSheet(
                                 )
                             }
                         }
+                    }
+                }
 
+                // 2b. Visual Style
+                item(key = "style_selector") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Estilo visual",
                             style = MaterialTheme.typography.labelLarge,
@@ -583,40 +608,110 @@ fun LyricsShareSheet(
                                 )
                             }
                         }
+                    }
+                }
 
-                        if (syncedLinesExist && hasTranslationAvailable) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Translate,
-                                    contentDescription = null,
-                                    tint = cardHighlightAccent,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                // 2c. Text Size
+                item(key = "text_size_selector") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Tamaño de letra",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(ShareLyricsTextSize.entries) { textSize ->
+                                val selected = selectedTextSize == textSize
                                 FilterChip(
-                                    selected = !includeTranslation,
-                                    onClick = { includeTranslation = false },
-                                    label = { Text("Original") },
+                                    selected = selected,
+                                    onClick = { selectedTextSize = textSize },
+                                    label = { Text(textSize.label) },
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = cardHighlightAccent.copy(alpha = 0.22f),
                                         selectedLabelColor = cardHighlightAccent
                                     ),
-                                    modifier = Modifier.testTag("share_lang_original")
-                                )
-                                FilterChip(
-                                    selected = includeTranslation,
-                                    onClick = { includeTranslation = true },
-                                    label = { Text("Bilingüe") },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = cardHighlightAccent.copy(alpha = 0.22f),
-                                        selectedLabelColor = cardHighlightAccent
-                                    ),
-                                    modifier = Modifier.testTag("share_lang_bilingual")
+                                    modifier = Modifier.testTag("share_text_size_${textSize.name.lowercase()}")
                                 )
                             }
+                        }
+                    }
+                }
+
+                // 2d. Video Resolution (when MP4 selected)
+                if (selectedFormat == ShareOutputFormat.VIDEO_MP4) {
+                    item(key = "resolution_selector") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Resolución de video",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                ShareVideoResolution.entries.forEach { resolution ->
+                                    val selected = selectedResolution == resolution
+                                    FilterChip(
+                                        selected = selected,
+                                        onClick = { selectedResolution = resolution },
+                                        label = {
+                                            Text(
+                                                text = resolution.label,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = cardHighlightAccent.copy(alpha = 0.22f),
+                                            selectedLabelColor = cardHighlightAccent
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .testTag("share_resolution_${resolution.name.lowercase()}")
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2e. Language Selector
+                if (syncedLinesExist && hasTranslationAvailable) {
+                    item(key = "language_selector") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Translate,
+                                contentDescription = null,
+                                tint = cardHighlightAccent,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            FilterChip(
+                                selected = !includeTranslation,
+                                onClick = { includeTranslation = false },
+                                label = { Text("Original") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = cardHighlightAccent.copy(alpha = 0.22f),
+                                    selectedLabelColor = cardHighlightAccent
+                                ),
+                                modifier = Modifier.testTag("share_lang_original")
+                            )
+                            FilterChip(
+                                selected = includeTranslation,
+                                onClick = { includeTranslation = true },
+                                label = { Text("Bilingüe") },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = cardHighlightAccent.copy(alpha = 0.22f),
+                                    selectedLabelColor = cardHighlightAccent
+                                ),
+                                modifier = Modifier.testTag("share_lang_bilingual")
+                            )
                         }
                     }
                 }
@@ -639,9 +734,10 @@ fun LyricsShareSheet(
                     }
                 }
 
-                // 4. Smart Selector: Synced LRC 1-6 lines OR Unsynced 15s-30s time range
+                // 4. Smart Selector: Synced LRC verses (max 1:30) OR Unsynced 15s-90s time range
                 if (syncedLinesExist && lyrics != null) {
                     item(key = "synced_header") {
+                        val selectedCount = (syncedRange.last - syncedRange.first + 1).coerceAtLeast(1)
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -649,19 +745,19 @@ fun LyricsShareSheet(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "Selecciona de 1 a 6 líneas",
+                                    text = "Selecciona versos (máx. 1:30)",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "${(syncedRange.last - syncedRange.first + 1).coerceAtLeast(1)}/6 líneas",
+                                    text = "$selectedCount ${if (selectedCount == 1) "verso" else "versos"}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = cardHighlightAccent
                                 )
                             }
-                            if (syncedWindow?.wasClampedTo30s == true) {
+                            if (syncedWindow?.wasClampedToMaxDuration == true) {
                                 Text(
-                                    text = "Clip ajustado automáticamente al máximo de 30 segundos.",
+                                    text = "Clip ajustado automáticamente al máximo de 1:30 (90 segundos).",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -672,7 +768,8 @@ fun LyricsShareSheet(
                     val transLines = translatedLyrics?.lines
                     itemsIndexed(
                         items = lyrics.lines,
-                        key = { idx, line -> "share_lrc_${idx}_${line.timestampMs}" }
+                        key = { idx, line -> "share_lrc_${idx}_${line.timestampMs}" },
+                        contentType = { _, _ -> "share_lrc_line" }
                     ) { idx, line ->
                         val isSyncedLine = line.timestampMs != null && !line.isInstrumental && line.text.isNotBlank()
                         if (isSyncedLine) {
@@ -790,47 +887,158 @@ fun LyricsShareSheet(
                 }
             }
 
-            // Bottom Share CTA
+            // Bottom Share / Save CTA
             Surface(
                 tonalElevation = 3.dp,
                 color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(
-                        onClick = { onStartExport(clipSpec) },
-                        enabled = !isExportingActive,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = cardHighlightAccent,
-                            contentColor = onAccentText
-                        ),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("share_export_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Share,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (selectedFormat == ShareOutputFormat.VIDEO_MP4) {
-                                "Exportar y compartir Video (.mp4)"
-                            } else {
-                                "Exportar y compartir Imagen (.png)"
-                            },
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
-                        )
+                when (exportState) {
+                    is ShareExportUiState.Ready -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp)
+                                .testTag("share_ready_actions_panel"),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Check,
+                                        contentDescription = null,
+                                        tint = cardHighlightAccent,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = savedToDeviceNotice ?: "Listo: ${exportState.fileName}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (savedToDeviceNotice != null) cardHighlightAccent else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                TextButton(
+                                    onClick = onResetExport,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.testTag("share_reset_ready_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Otro", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                FilledTonalButton(
+                                    onClick = { onSaveToDevice(exportState) },
+                                    enabled = !isSavingToDevice,
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(50.dp)
+                                        .testTag("share_save_device_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Download,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isSavingToDevice) "Guardando…" else "Guardar",
+                                        maxLines = 1,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Button(
+                                    onClick = { onExportReady(exportState) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = cardHighlightAccent,
+                                        contentColor = onAccentText
+                                    ),
+                                    shape = RoundedCornerShape(16.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(50.dp)
+                                        .testTag("share_ready_system_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Share,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Compartir",
+                                        maxLines = 1,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (exportState is ShareExportUiState.Error) {
+                                Text(
+                                    text = exportState.message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Button(
+                                onClick = { onStartExport(clipSpec) },
+                                enabled = !isExportingActive,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = cardHighlightAccent,
+                                    contentColor = onAccentText
+                                ),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("share_export_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = if (selectedFormat == ShareOutputFormat.VIDEO_MP4) {
+                                        "Exportar Video (.mp4)"
+                                    } else {
+                                        "Exportar Imagen (.png)"
+                                    },
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -916,7 +1124,7 @@ private fun ShareCardLivePreview(
     isStaticImage: Boolean
 ) {
     val cardModifier = Modifier
-        .height(240.dp)
+        .height(264.dp)
         .aspectRatio(9f / 16f)
         .clip(RoundedCornerShape(20.dp))
         .border(
@@ -1045,45 +1253,171 @@ private fun ShareCardLivePreview(
                 // Body
                 if (spec.isSyncedLyrics && spec.verses.isNotEmpty()) {
                     val absoluteTimeMs = spec.startMs + elapsedMs
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        spec.verses.take(6).forEach { verse ->
-                            val isCurrent = isStaticImage ||
-                                (absoluteTimeMs >= verse.startMs && absoluteTimeMs < verse.endMs)
-                            val isPast = !isStaticImage && absoluteTimeMs >= verse.endMs
-                            val alpha = when {
-                                isCurrent -> 1f
-                                isPast -> 0.72f
-                                else -> 0.45f
-                            }
-                            Text(
-                                text = verse.text,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontSize = if (spec.verses.size <= 3) 9.5.sp else 8.sp,
-                                    lineHeight = if (spec.verses.size <= 3) 12.sp else 10.sp
-                                ),
-                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                                color = Color.White.copy(alpha = alpha),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(vertical = 1.5.dp)
-                            )
-                            if (spec.includeTranslation && !verse.secondaryText.isNullOrBlank()) {
+                    val verseCount = spec.verses.size
+                    if (isStaticImage) {
+                        val baseFont = when {
+                            verseCount <= 3 -> 9.8f
+                            verseCount <= 6 -> 8.2f
+                            else -> 6.8f
+                        }
+                        val scaledPrimarySp = (baseFont * spec.textSize.multiplier)
+                            .coerceAtMost(if (verseCount <= 6) 13.5f else 10.2f)
+                            .sp
+                        val scaledLineHeightSp = (scaledPrimarySp.value * 1.24f).sp
+                        val scaledSecondarySp = (scaledPrimarySp.value * 0.75f).coerceAtLeast(5.8f).sp
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .clipToBounds(),
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            spec.verses.forEach { verse ->
                                 Text(
-                                    text = verse.secondaryText,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 7.sp,
-                                        lineHeight = 9.sp
+                                    text = verse.text,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontSize = scaledPrimarySp,
+                                        lineHeight = scaledLineHeightSp
                                     ),
-                                    fontStyle = FontStyle.Italic,
-                                    color = accentColor.copy(alpha = alpha),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = if (verseCount <= 6) 2 else 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(vertical = if (verseCount <= 6) 1.5.dp else 0.75.dp)
                                 )
+                                if (spec.includeTranslation && !verse.secondaryText.isNullOrBlank()) {
+                                    Text(
+                                        text = verse.secondaryText,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = scaledSecondarySp,
+                                            lineHeight = (scaledSecondarySp.value * 1.2f).sp
+                                        ),
+                                        fontStyle = FontStyle.Italic,
+                                        color = accentColor,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // Spotify-style animated vertical scroll centering the active verse cleanly
+                        val activeIdx = remember(spec.verses, absoluteTimeMs) {
+                            val exact = spec.verses.indexOfFirst {
+                                absoluteTimeMs >= it.startMs && absoluteTimeMs < it.endMs
+                            }
+                            if (exact >= 0) exact
+                            else spec.verses.indexOfLast { absoluteTimeMs >= it.startMs }.coerceAtLeast(0)
+                        }.coerceIn(0, spec.verses.lastIndex)
+
+                        val hasTrans = spec.includeTranslation && spec.verses.any { !it.secondaryText.isNullOrBlank() }
+                        val scrollBaseSp = (if (hasTrans) 8.4f else 9.5f) * spec.textSize.multiplier
+                        val scaledPrimarySp = scrollBaseSp.coerceIn(7.8f, 13.8f).sp
+                        val scaledLineHeightSp = (scaledPrimarySp.value * 1.22f).sp
+                        val scaledSecondarySp = (scaledPrimarySp.value * 0.74f).coerceAtLeast(6f).sp
+
+                        val itemHeightsPx = remember(spec.verses, scaledPrimarySp, hasTrans) {
+                            IntArray(spec.verses.size)
+                        }
+                        var viewportHeightPx by remember { mutableIntStateOf(0) }
+
+                        val animatedIndex by animateFloatAsState(
+                            targetValue = activeIdx.toFloat(),
+                            animationSpec = tween(durationMillis = 380, easing = FastOutSlowInEasing),
+                            label = "preview_scroll_idx"
+                        )
+
+                        val scrollOffsetPx = remember(animatedIndex, viewportHeightPx, spec.verses.size) {
+                            if (viewportHeightPx <= 0 || spec.verses.isEmpty()) 0f
+                            else {
+                                val safeCount = spec.verses.size
+                                val floorIdx = animatedIndex.toInt().coerceIn(0, safeCount - 1)
+                                val ceilIdx = (floorIdx + 1).coerceIn(0, safeCount - 1)
+                                val frac = (animatedIndex - floorIdx).coerceIn(0f, 1f)
+
+                                fun centerYOf(idx: Int): Float {
+                                    var top = 0f
+                                    for (i in 0 until idx) {
+                                        top += (itemHeightsPx.getOrNull(i)?.takeIf { it > 0 } ?: 36).toFloat()
+                                    }
+                                    val h = (itemHeightsPx.getOrNull(idx)?.takeIf { it > 0 } ?: 36).toFloat()
+                                    return top + h / 2f
+                                }
+
+                                val y0 = centerYOf(floorIdx)
+                                val y1 = centerYOf(ceilIdx)
+                                val activeCenterY = y0 + (y1 - y0) * frac
+                                (viewportHeightPx * 0.48f) - activeCenterY
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .clipToBounds()
+                                .onSizeChanged { viewportHeightPx = it.height }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .graphicsLayer {
+                                        translationY = scrollOffsetPx
+                                    }
+                            ) {
+                                spec.verses.forEachIndexed { idx, verse ->
+                                    val isCurrent = idx == activeIdx
+                                    val alpha by animateFloatAsState(
+                                        targetValue = if (isCurrent) 1f else 0.40f,
+                                        animationSpec = tween(durationMillis = 280),
+                                        label = "verse_alpha_$idx"
+                                    )
+                                    val scale by animateFloatAsState(
+                                        targetValue = if (isCurrent) 1.05f else 1.0f,
+                                        animationSpec = tween(durationMillis = 280),
+                                        label = "verse_scale_$idx"
+                                    )
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onSizeChanged { sz ->
+                                                if (idx in itemHeightsPx.indices) {
+                                                    itemHeightsPx[idx] = sz.height
+                                                }
+                                            }
+                                            .padding(vertical = 4.dp)
+                                            .graphicsLayer {
+                                                scaleX = scale
+                                                scaleY = scale
+                                                transformOrigin = TransformOrigin(0f, 0.5f)
+                                            }
+                                    ) {
+                                        Text(
+                                            text = verse.text,
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontSize = scaledPrimarySp,
+                                                lineHeight = scaledLineHeightSp
+                                            ),
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            color = Color.White.copy(alpha = alpha),
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (spec.includeTranslation && !verse.secondaryText.isNullOrBlank()) {
+                                            Text(
+                                                text = verse.secondaryText,
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = scaledSecondarySp,
+                                                    lineHeight = (scaledSecondarySp.value * 1.2f).sp
+                                                ),
+                                                fontStyle = FontStyle.Italic,
+                                                color = accentColor.copy(alpha = alpha),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1111,12 +1445,16 @@ private fun ShareCardLivePreview(
                         )
                         if (!spec.plainExcerpt.isNullOrBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))
+                            val excerptPreviewSp = (7.8f * spec.textSize.multiplier).coerceAtMost(12.2f).sp
                             Text(
                                 text = spec.plainExcerpt,
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.5.sp, lineHeight = 10.sp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = excerptPreviewSp,
+                                    lineHeight = (excerptPreviewSp.value * 1.28f).sp
+                                ),
                                 color = Color.White.copy(alpha = 0.88f),
                                 textAlign = TextAlign.Center,
-                                maxLines = 3,
+                                maxLines = 4,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
@@ -1258,7 +1596,7 @@ private fun UnsyncedClipRangeSelectorCard(
                 )
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Selector de fragmento (15s – 30s)",
+                        text = "Selector de fragmento (15s – 1:30)",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -1301,28 +1639,33 @@ private fun UnsyncedClipRangeSelectorCard(
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = "Duración del clip: ${(durationMs / 1000L).coerceAtLeast(1L)}s",
+                    text = "Duración del clip: ${formatDuration(durationMs)} (máx. 1:30)",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Row(
+                val durationOptions = listOf(15L, 30L, 45L, 60L, 90L)
+                    .map { rawSec -> rawSec to rawSec.coerceIn(minDurSec, maxDurSec) }
+                    .distinctBy { it.second }
+                LazyRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    listOf(15L, 20L, 25L, 30L).forEach { sec ->
-                        val clampedSec = sec.coerceIn(minDurSec, maxDurSec)
+                    items(durationOptions) { (rawSec, clampedSec) ->
                         val selected = abs((durationMs / 1000L) - clampedSec) <= 1L
+                        val labelText = if (clampedSec >= 60L) {
+                            formatDuration(clampedSec * 1000L)
+                        } else {
+                            "${clampedSec}s"
+                        }
                         FilterChip(
                             selected = selected,
                             onClick = { onDurationChange(clampedSec * 1000L) },
-                            label = { Text("${clampedSec}s") },
+                            label = { Text(labelText) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = accentColor.copy(alpha = 0.22f),
                                 selectedLabelColor = accentColor
                             ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("share_unsynced_dur_${sec}s")
+                            modifier = Modifier.testTag("share_unsynced_dur_${rawSec}s")
                         )
                     }
                 }

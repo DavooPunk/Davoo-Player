@@ -127,7 +127,7 @@ private val openSourceNotices = listOf(
         library = "OkHttp",
         author = "Square, Inc.",
         license = "Apache License 2.0",
-        purpose = "Cliente HTTP ligero para descarga opcional de letras (LRCLIB) y traducción con DeepL / Google Traductor"
+        purpose = "Cliente HTTP ligero para descarga opcional de letras (LRCLIB), carátulas Deezer y traducción con DeepL / Google Traductor / DeepSeek AI"
     ),
     OpenSourceNotice(
         library = "Kotlin, Coroutines & Kotlinx Serialization",
@@ -139,8 +139,33 @@ private val openSourceNotices = listOf(
 
 private val changelogReleases = listOf(
     ChangelogRelease(
-        version = "v2.0.6",
+        version = "v2.1.1",
         tag = "Actual",
+        items = listOf(
+            "Reproduciendo ahora mejorado con barra inferior fija estilo YT Music (Cola, Letras, Info): elimina gestos accidentales en paneles modales migrando toda la app a vistas fijas a pantalla completa o diálogos centrados, incorpora títulos deslizantes (marquee) y quita la cápsula intermedia sobre la carátula.",
+            "Clips de letra estilo Spotify sin límite de versos (hasta 1:30) y guardado en el dispositivo: selecciona cualquier cantidad de versos dentro de 90 segundos con scroll vertical continuo suavizado, botón directo «Guardar» en Películas o Imágenes vía Scoped Storage y botón «Compartir» sin perder el archivo generado.",
+            "Traductor DeepSeek AI multiidioma estricto: traduce íntegramente canciones con mezclas de idiomas (español/inglés, japonés/inglés, etc.) sin omitir frases extranjeras, sobrescribiendo la caché local al regenerar.",
+            "Catálogo AutoEq ampliado e importador GraphicEQ .txt: más de 30 perfiles calibrados (incluyendo línea KZ EDX/Castor/ZS10/D-Fi/PR2, Moondrop Chu II, Tangzu Wan'er y Truthear Zero) más botón «Importar .txt» con interpolación logarítmica de 10 bandas y preamp seguro.",
+            "Preamp de ReplayGain dedicado en Opciones (3.5 mm / DAC): deslizador independiente de Preamp (+3 dB por defecto, -6 a +12 dB) y pistas sin etiqueta (-4 dB por defecto, -12 a 0 dB) con persistencia, respaldo .json y aprovechamiento dinámico de rango para auriculares exigentes."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.1.0",
+        tag = "Anterior",
+        items = listOf(
+            "Integración de DeepSeek AI como motor de traducción de letras: añade DeepSeek junto a DeepL y Google Traductor en Opciones > Traductor de letras y en el menú rápido del visor de letras, enviando los versos en una sola petición JSON estructurada para preservar contexto poético, modismos y marcas de tiempo .lrc (con prueba de conexión y caché offline).",
+            "Auto-etiquetado desde la API pública de Deezer (sin ARL ni descargas de audio): autocompleta carátulas HD (1000×1000), álbum, artista, año y número de pista en el editor de etiquetas o por lotes para archivos MP3/FLAC locales.",
+            "Descarga de letras sincronizadas (.lrc) por lotes desde LRCLIB: obtén letras con marcas de tiempo para toda tu biblioteca existente y expórtalas a carpeta si lo deseas.",
+            "Compartir letras mejorado hasta 10 líneas, límite ampliado de hasta 1:30 (90 segundos), texto más grande y video 1080p: selecciona hasta 10 líneas .lrc o un fragmento de hasta 1:30 (90s), elige el tamaño de letra (Compacto a Muy grande) en imágenes y videos, y exporta MP4 en 1080p Full HD (con respaldo automático a 720p en hardware ligero).",
+            "Orden de biblioteca persistente: Davoo Player recuerda automáticamente el criterio de ordenamiento elegido (título, artista, álbum, duración o más reciente) entre sesiones.",
+            "Escáner de sonoridad ReplayGain (-18 dBFS) y fade suave al pausar: analiza tu música local bajo demanda desde Opciones para normalizar volumen sin modificar archivos y activa un fade suave (~180 ms) al pausar o reanudar.",
+            "Telemetría de salida de audio y DAC USB: muestra en vivo la ruta activa (DAC USB, Audífonos, Bluetooth, Altavoz), frecuencias soportadas y profundidad de bits en Reproduciendo ahora y Metadatos sin permisos adicionales.",
+            "Explorador jerárquico de carpetas físicas: navega por subcarpetas reales con ruta superior interactiva, reproducción completa por subcarpeta y botón Atrás en Colección > Carpetas."
+        )
+    ),
+    ChangelogRelease(
+        version = "v2.0.6",
+        tag = "Anterior",
         items = listOf(
             "Compartir letras y fragmentos en Video 9:16 (.mp4) e Imagen (.png): exporta clips verticales listos para Estados de WhatsApp e Historias directamente desde el icono de compartir en la esquina superior derecha del visor inmersivo de letras.",
             "Selección inteligente de versos y tiempos: toca de 1 a 6 líneas consecutivas en letras .lrc (con offset calibrado, tope de 30s y modo Original o Bilingüe) o ajusta un fragmento de 15s a 30s con visualizador animado en pistas sin letra sincronizada.",
@@ -336,7 +361,11 @@ fun CreditsBottomSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     contentPadding = PaddingValues(vertical = 2.dp)
                 ) {
-                    items(AboutSheetSection.entries) { section ->
+                    items(
+                        items = AboutSheetSection.entries,
+                        key = { it.name },
+                        contentType = { "about_tab" }
+                    ) { section ->
                         val selected = selectedSection == section
                         FilterChip(
                             selected = selected,

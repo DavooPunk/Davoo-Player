@@ -183,6 +183,9 @@ interface ExcludedFolderDao {
 
 @Dao
 interface TrackLyricsDao {
+    @Query("SELECT * FROM track_lyrics")
+    suspend fun getAllLyricsOnce(): List<TrackLyricsEntity>
+
     @Query("SELECT * FROM track_lyrics WHERE trackId = :trackId LIMIT 1")
     suspend fun getLyricsForTrack(trackId: String): TrackLyricsEntity?
 

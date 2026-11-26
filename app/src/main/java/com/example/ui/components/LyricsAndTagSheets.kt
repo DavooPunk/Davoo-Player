@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.DragInteraction
@@ -42,6 +43,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -51,7 +54,6 @@ import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OfflinePin
@@ -67,13 +69,11 @@ import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -82,7 +82,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -93,8 +92,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -106,11 +105,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -118,7 +117,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.ColorUtils
+import coil.compose.AsyncImage
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ai.HumanLyricsTranslationLinks
 import com.example.ai.LyricsDisplayMode
 import com.example.ai.LyricsTranslationLanguage
@@ -129,10 +129,10 @@ import com.example.data.repository.LrcLibLyricsFetcher
 import com.example.data.repository.OnlineLyricsCandidate
 import com.example.model.AudioFormat
 import com.example.model.AudioTrack
+import com.example.model.DeezerTagSuggestion
 import com.example.model.FolderGroup
 import com.example.model.LyricsData
 import com.example.model.SdCardFolder
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.playback.PlaybackPositionState
 import com.example.ui.theme.ArtworkColorExtractor
 import com.example.ui.theme.ThemePalette
@@ -140,45 +140,28 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Immutable
+data class LyricsAdaptivePalette(
+    val accentColor: Color,
+    val sheetBaseBg: Color,
+    val sheetTopGlow: Color,
+    val sheetBottomBg: Color,
+    val panelSurfaceBg: Color,
+    val menuSurfaceBg: Color,
+    val resultCardBg: Color,
+    val primaryFg: Color,
+    val secondaryFg: Color,
+    val brightAccentText: Color,
+    val onAccentContent: Color
+)
+
 @Composable
-fun LyricsBottomSheet(
+fun rememberLyricsAdaptivePalette(
     track: AudioTrack,
-    lyrics: LyricsData?,
-    isLoading: Boolean,
-    positionMs: Long,
-    onSeekTo: (Long) -> Unit,
-    onPickLrcFile: () -> Unit,
-    onDismiss: () -> Unit,
-    onClearSavedLyrics: (() -> Unit)? = null,
-    onSearchOnlineLyrics: (suspend (customQuery: String?) -> Result<List<OnlineLyricsCandidate>>)? = null,
-    onSaveOnlineLyrics: (suspend (OnlineLyricsCandidate) -> Unit)? = null,
-    onOpenLyricsify: ((query: String) -> Unit)? = null,
-    translationState: LyricsTranslationUiState = LyricsTranslationUiState.Idle,
-    selectedEngine: TranslationEngine = TranslationEngine.DEEPL,
-    onSelectEngine: ((TranslationEngine) -> Unit)? = null,
-    onTranslateLyrics: ((LyricsData, LyricsTranslationLanguage, TranslationEngine) -> Unit)? = null,
-    onSaveManualTranslation: ((LyricsData, String, LyricsTranslationLanguage) -> Unit)? = null,
-    onClearSavedTranslation: (() -> Unit)? = null,
-    onOpenHumanTranslationSite: ((url: String, siteName: String) -> Unit)? = null,
-    durationMs: Long = track.durationMs,
-    isPlaying: Boolean = false,
-    onTogglePlayPause: (() -> Unit)? = null,
-    dynamicArtworkColorsEnabled: Boolean = true,
-    dynamicAccentColor: Color? = null,
-    onAdjustOffset: ((deltaMs: Long) -> Unit)? = null,
-    onResetOffset: (() -> Unit)? = null,
-    onExportSaveLrc: ((includeTranslation: Boolean) -> Unit)? = null,
-    onExportShareLrc: ((includeTranslation: Boolean) -> Unit)? = null,
-    livePositionFlow: StateFlow<PlaybackPositionState>? = null,
-    onShareSnippet: ((includeTranslation: Boolean) -> Unit)? = null
-) {
-    BackHandler(onBack = onDismiss)
-
+    dynamicArtworkColorsEnabled: Boolean,
+    dynamicAccentColor: Color? = null
+): LyricsAdaptivePalette {
     val context = LocalContext.current
-    val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
-
     val isLossless = track.format == AudioFormat.FLAC || track.format == AudioFormat.WAV
     val baseAccent = if (isLossless) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
 
@@ -253,6 +236,265 @@ fun LyricsBottomSheet(
     }
     val onAccentContent = ThemePalette.bestContrastingTextColor(accentColor)
 
+    return LyricsAdaptivePalette(
+        accentColor = accentColor,
+        sheetBaseBg = sheetBaseBg,
+        sheetTopGlow = sheetTopGlow,
+        sheetBottomBg = sheetBottomBg,
+        panelSurfaceBg = panelSurfaceBg,
+        menuSurfaceBg = menuSurfaceBg,
+        resultCardBg = resultCardBg,
+        primaryFg = primaryFg,
+        secondaryFg = secondaryFg,
+        brightAccentText = brightAccentText,
+        onAccentContent = onAccentContent
+    )
+}
+
+@Composable
+fun LyricsBottomSheet(
+    track: AudioTrack,
+    lyrics: LyricsData?,
+    isLoading: Boolean,
+    positionMs: Long,
+    onSeekTo: (Long) -> Unit,
+    onPickLrcFile: () -> Unit,
+    onDismiss: () -> Unit,
+    onClearSavedLyrics: (() -> Unit)? = null,
+    onSearchOnlineLyrics: (suspend (customQuery: String?) -> Result<List<OnlineLyricsCandidate>>)? = null,
+    onSaveOnlineLyrics: (suspend (OnlineLyricsCandidate) -> Unit)? = null,
+    onOpenLyricsify: ((query: String) -> Unit)? = null,
+    translationState: LyricsTranslationUiState = LyricsTranslationUiState.Idle,
+    selectedEngine: TranslationEngine = TranslationEngine.DEEPL,
+    onSelectEngine: ((TranslationEngine) -> Unit)? = null,
+    onTranslateLyrics: ((LyricsData, LyricsTranslationLanguage, TranslationEngine) -> Unit)? = null,
+    onSaveManualTranslation: ((LyricsData, String, LyricsTranslationLanguage) -> Unit)? = null,
+    onClearSavedTranslation: (() -> Unit)? = null,
+    onOpenHumanTranslationSite: ((url: String, siteName: String) -> Unit)? = null,
+    durationMs: Long = track.durationMs,
+    isPlaying: Boolean = false,
+    onTogglePlayPause: (() -> Unit)? = null,
+    dynamicArtworkColorsEnabled: Boolean = true,
+    dynamicAccentColor: Color? = null,
+    onAdjustOffset: ((deltaMs: Long) -> Unit)? = null,
+    onResetOffset: (() -> Unit)? = null,
+    onExportSaveLrc: ((includeTranslation: Boolean) -> Unit)? = null,
+    onExportShareLrc: ((includeTranslation: Boolean) -> Unit)? = null,
+    livePositionFlow: StateFlow<PlaybackPositionState>? = null,
+    onShareSnippet: ((includeTranslation: Boolean) -> Unit)? = null,
+    hasDeepSeekApiKey: Boolean = true,
+    onOpenTranslatorSettings: (() -> Unit)? = null,
+    openTranslateMenuOnStart: Boolean = false
+) {
+    BackHandler(onBack = onDismiss)
+
+    val palette = rememberLyricsAdaptivePalette(
+        track = track,
+        dynamicArtworkColorsEnabled = dynamicArtworkColorsEnabled,
+        dynamicAccentColor = dynamicAccentColor
+    )
+
+    var displayMode by remember(track.id) { mutableStateOf(LyricsDisplayMode.BILINGUAL) }
+    val hasLoadedLyrics = !isLoading && lyrics != null && lyrics.lines.isNotEmpty()
+    val hasNativeBilingual = lyrics?.hasEmbeddedTranslation == true
+    val activeTranslationSuccess = (translationState as? LyricsTranslationUiState.Success)
+        ?.takeIf { it.trackId == track.id && it.translatedLyrics.lines.size == lyrics?.lines?.size }
+    val hasAnyTranslation = hasNativeBilingual || activeTranslationSuccess != null
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(palette.sheetTopGlow, palette.sheetBaseBg, palette.sheetBottomBg)
+                )
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+            .testTag("lyrics_bottom_sheet")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp)
+                .padding(top = 6.dp, bottom = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // Clean Spotify-style full-screen header: collapse arrow on left, centered bold marquee title + artist
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("lyrics_close_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Cerrar letras",
+                        tint = palette.primaryFg,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = track.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.primaryFg,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.basicMarquee(
+                            iterations = Int.MAX_VALUE,
+                            repeatDelayMillis = 1500,
+                            velocity = 30.dp
+                        )
+                    )
+                    Text(
+                        text = if (hasLoadedLyrics) {
+                            track.artist.ifBlank { lyrics?.sourceLabel.orEmpty() }
+                        } else {
+                            track.artist.ifBlank { lyrics?.sourceLabel ?: "Letras y sincronización (.lrc)" }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondaryFg,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (onShareSnippet != null) {
+                    IconButton(
+                        onClick = {
+                            val includeTrans = hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL
+                            onShareSnippet(includeTrans)
+                        },
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("lyrics_share_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Share,
+                            contentDescription = "Compartir letra o clip",
+                            tint = palette.primaryFg,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                } else {
+                    Spacer(modifier = Modifier.size(48.dp))
+                }
+            }
+
+            LyricsContentPanel(
+                track = track,
+                lyrics = lyrics,
+                isLoading = isLoading,
+                positionMs = positionMs,
+                onSeekTo = onSeekTo,
+                onPickLrcFile = onPickLrcFile,
+                palette = palette,
+                displayMode = displayMode,
+                onDisplayModeChange = { displayMode = it },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                onClearSavedLyrics = onClearSavedLyrics,
+                onSearchOnlineLyrics = onSearchOnlineLyrics,
+                onSaveOnlineLyrics = onSaveOnlineLyrics,
+                onOpenLyricsify = onOpenLyricsify,
+                translationState = translationState,
+                selectedEngine = selectedEngine,
+                onSelectEngine = onSelectEngine,
+                onTranslateLyrics = onTranslateLyrics,
+                onSaveManualTranslation = onSaveManualTranslation,
+                onClearSavedTranslation = onClearSavedTranslation,
+                onOpenHumanTranslationSite = onOpenHumanTranslationSite,
+                isPlaying = isPlaying,
+                onAdjustOffset = onAdjustOffset,
+                onResetOffset = onResetOffset,
+                onExportSaveLrc = onExportSaveLrc,
+                onExportShareLrc = onExportShareLrc,
+                livePositionFlow = livePositionFlow,
+                onShareSnippet = onShareSnippet,
+                showShareButtonInBottomBar = false,
+                hasDeepSeekApiKey = hasDeepSeekApiKey,
+                onOpenTranslatorSettings = onOpenTranslatorSettings,
+                openTranslateMenuOnStart = openTranslateMenuOnStart
+            )
+
+            // Spotify-style Playback Progress Bar right below the two corner icons (isolated recomposition scope)
+            LyricsScrubberSection(
+                trackId = track.id,
+                fallbackPositionMs = positionMs,
+                fallbackDurationMs = durationMs.coerceAtLeast(track.durationMs),
+                livePositionFlow = livePositionFlow,
+                isPlaying = isPlaying,
+                accentColor = palette.accentColor,
+                onAccentContent = palette.onAccentContent,
+                secondaryFg = palette.secondaryFg,
+                onSeekTo = onSeekTo,
+                onTogglePlayPause = onTogglePlayPause
+            )
+        }
+    }
+}
+
+@Composable
+fun LyricsContentPanel(
+    track: AudioTrack,
+    lyrics: LyricsData?,
+    isLoading: Boolean,
+    positionMs: Long,
+    onSeekTo: (Long) -> Unit,
+    onPickLrcFile: () -> Unit,
+    palette: LyricsAdaptivePalette,
+    displayMode: LyricsDisplayMode,
+    onDisplayModeChange: (LyricsDisplayMode) -> Unit,
+    modifier: Modifier = Modifier,
+    onClearSavedLyrics: (() -> Unit)? = null,
+    onSearchOnlineLyrics: (suspend (customQuery: String?) -> Result<List<OnlineLyricsCandidate>>)? = null,
+    onSaveOnlineLyrics: (suspend (OnlineLyricsCandidate) -> Unit)? = null,
+    onOpenLyricsify: ((query: String) -> Unit)? = null,
+    translationState: LyricsTranslationUiState = LyricsTranslationUiState.Idle,
+    selectedEngine: TranslationEngine = TranslationEngine.DEEPL,
+    onSelectEngine: ((TranslationEngine) -> Unit)? = null,
+    onTranslateLyrics: ((LyricsData, LyricsTranslationLanguage, TranslationEngine) -> Unit)? = null,
+    onSaveManualTranslation: ((LyricsData, String, LyricsTranslationLanguage) -> Unit)? = null,
+    onClearSavedTranslation: (() -> Unit)? = null,
+    onOpenHumanTranslationSite: ((url: String, siteName: String) -> Unit)? = null,
+    isPlaying: Boolean = false,
+    onAdjustOffset: ((deltaMs: Long) -> Unit)? = null,
+    onResetOffset: (() -> Unit)? = null,
+    onExportSaveLrc: ((includeTranslation: Boolean) -> Unit)? = null,
+    onExportShareLrc: ((includeTranslation: Boolean) -> Unit)? = null,
+    livePositionFlow: StateFlow<PlaybackPositionState>? = null,
+    onShareSnippet: ((includeTranslation: Boolean) -> Unit)? = null,
+    showShareButtonInBottomBar: Boolean = false,
+    hasDeepSeekApiKey: Boolean = true,
+    onOpenTranslatorSettings: (() -> Unit)? = null,
+    openTranslateMenuOnStart: Boolean = false
+) {
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val accentColor = palette.accentColor
+    val panelSurfaceBg = palette.panelSurfaceBg
+    val menuSurfaceBg = palette.menuSurfaceBg
+    val resultCardBg = palette.resultCardBg
+    val primaryFg = palette.primaryFg
+    val secondaryFg = palette.secondaryFg
+    val brightAccentText = palette.brightAccentText
+    val onAccentContent = palette.onAccentContent
+
     var showOnlineSearch by remember(track.id) { mutableStateOf(false) }
     var onlineQuery by remember(track.id) {
         mutableStateOf(LrcLibLyricsFetcher.buildDefaultSearchQuery(track.title, track.artist))
@@ -263,11 +505,10 @@ fun LyricsBottomSheet(
     var hasSearchedOnce by remember(track.id) { mutableStateOf(false) }
 
     var selectedTargetLanguage by remember(track.id) { mutableStateOf(LyricsTranslationLanguage.SPANISH) }
-    var showTranslateMenu by remember(track.id) { mutableStateOf(false) }
+    var showTranslateMenu by remember(track.id, openTranslateMenuOnStart) { mutableStateOf(openTranslateMenuOnStart) }
     var showManageMenu by remember(track.id) { mutableStateOf(false) }
     var showManualTranslationEditor by remember(track.id) { mutableStateOf(false) }
     var manualTranslationDraft by remember(track.id) { mutableStateOf("") }
-    var displayMode by remember(track.id) { mutableStateOf(LyricsDisplayMode.BILINGUAL) }
     var showExportDialog by remember(track.id) { mutableStateOf(false) }
     var exportIncludeTranslation by remember(track.id) { mutableStateOf(false) }
 
@@ -290,7 +531,7 @@ fun LyricsBottomSheet(
         if (activeTranslationSuccess != null) {
             selectedTargetLanguage = activeTranslationSuccess.language
             if (displayMode == LyricsDisplayMode.ORIGINAL) {
-                displayMode = LyricsDisplayMode.BILINGUAL
+                onDisplayModeChange(LyricsDisplayMode.BILINGUAL)
             }
         }
     }
@@ -381,93 +622,10 @@ fun LyricsBottomSheet(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(sheetTopGlow, sheetBaseBg, sheetBottomBg)
-                )
-            )
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
-            .testTag("lyrics_bottom_sheet")
+    Column(
+        modifier = modifier.clipToBounds(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp)
-                .padding(top = 6.dp, bottom = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // Clean Spotify-style full-screen header: collapse arrow on left, centered bold title + artist
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("lyrics_close_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Cerrar letras",
-                        tint = primaryFg,
-                        modifier = Modifier.size(30.dp)
-                    )
-                }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = track.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = primaryFg,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = if (hasLoadedLyrics) {
-                            track.artist.ifBlank { lyrics?.sourceLabel.orEmpty() }
-                        } else {
-                            track.artist.ifBlank { lyrics?.sourceLabel ?: "Letras y sincronización (.lrc)" }
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = secondaryFg,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (onShareSnippet != null) {
-                    IconButton(
-                        onClick = {
-                            val includeTrans = hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL
-                            onShareSnippet(includeTrans)
-                        },
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("lyrics_share_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Share,
-                            contentDescription = "Compartir letra o clip",
-                            tint = primaryFg,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                } else {
-                    Spacer(modifier = Modifier.size(48.dp))
-                }
-            }
 
             // Show top action buttons ONLY when no lyrics are loaded yet (clean view once lyrics load)
             if (!hasLoadedLyrics && !isLoading) {
@@ -487,6 +645,7 @@ fun LyricsBottomSheet(
                                     triggerOnlineSearch(null)
                                 }
                             },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             colors = ButtonDefaults.filledTonalButtonColors(
                                 containerColor = accentColor.copy(alpha = 0.24f),
                                 contentColor = primaryFg
@@ -497,11 +656,16 @@ fun LyricsBottomSheet(
                         ) {
                             Icon(Icons.Rounded.CloudDownload, contentDescription = null, tint = brightAccentText, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (showOnlineSearch) "Ocultar búsqueda" else "Descargar letra")
+                            Text(
+                                text = if (showOnlineSearch) "Ocultar búsqueda" else "Descargar letra",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     OutlinedButton(
                         onClick = onPickLrcFile,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = primaryFg),
                         border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
                         modifier = Modifier
@@ -510,7 +674,11 @@ fun LyricsBottomSheet(
                     ) {
                         Icon(Icons.Rounded.UploadFile, contentDescription = null, tint = brightAccentText, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Archivo .lrc")
+                        Text(
+                            text = "Archivo .lrc",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -544,37 +712,58 @@ fun LyricsBottomSheet(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
+                            horizontalAlignment = Alignment.End
                         ) {
-                            if (lyrics != null && onTranslateLyrics != null && translationError.engine == TranslationEngine.DEEPL) {
-                                TextButton(
-                                    onClick = {
-                                        onSelectEngine?.invoke(TranslationEngine.GOOGLE)
-                                        onTranslateLyrics(lyrics, translationError.language, TranslationEngine.GOOGLE)
-                                    },
-                                    modifier = Modifier.testTag("error_switch_to_google_button")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                if (translationError.engine == TranslationEngine.DEEPSEEK && onOpenTranslatorSettings != null) {
+                                    TextButton(
+                                        onClick = onOpenTranslatorSettings,
+                                        modifier = Modifier.testTag("error_open_deepseek_settings_button")
+                                    ) {
+                                        Text("Ir a Opciones")
+                                    }
+                                }
+                                if (lyrics != null && onTranslateLyrics != null &&
+                                    (translationError.engine == TranslationEngine.DEEPL ||
+                                        translationError.engine == TranslationEngine.DEEPSEEK)
                                 ) {
-                                    Text("Usar Google")
+                                    TextButton(
+                                        onClick = {
+                                            onSelectEngine?.invoke(TranslationEngine.GOOGLE)
+                                            onTranslateLyrics(lyrics, translationError.language, TranslationEngine.GOOGLE)
+                                        },
+                                        modifier = Modifier.testTag("error_switch_to_google_button")
+                                    ) {
+                                        Text("Usar Google")
+                                    }
                                 }
                             }
-                            if (onSaveManualTranslation != null) {
-                                TextButton(
-                                    onClick = { showManualTranslationEditor = true },
-                                    modifier = Modifier.testTag("error_paste_translation_button")
-                                ) {
-                                    Text("Pegar traducción")
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                if (onSaveManualTranslation != null) {
+                                    TextButton(
+                                        onClick = { showManualTranslationEditor = true },
+                                        modifier = Modifier.testTag("error_paste_translation_button")
+                                    ) {
+                                        Text("Pegar traducción")
+                                    }
                                 }
-                            }
-                            if (lyrics != null && onTranslateLyrics != null) {
-                                TextButton(
-                                    onClick = {
-                                        onTranslateLyrics(lyrics, translationError.language, translationError.engine)
-                                    },
-                                    modifier = Modifier.testTag("retry_translation_button")
-                                ) {
-                                    Text("Reintentar")
+                                if (lyrics != null && onTranslateLyrics != null) {
+                                    TextButton(
+                                        onClick = {
+                                            onTranslateLyrics(lyrics, translationError.language, translationError.engine)
+                                        },
+                                        modifier = Modifier.testTag("retry_translation_button")
+                                    ) {
+                                        Text("Reintentar")
+                                    }
                                 }
                             }
                         }
@@ -738,8 +927,8 @@ fun LyricsBottomSheet(
                         .testTag("online_lyrics_search_panel")
                 ) {
                     Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -807,10 +996,15 @@ fun LyricsBottomSheet(
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 180.dp),
+                                    .weight(1f, fill = false)
+                                    .heightIn(max = 136.dp),
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                itemsIndexed(onlineResults.take(10), key = { _, item -> item.id }) { _, candidate ->
+                                itemsIndexed(
+                                    items = onlineResults.take(10),
+                                    key = { _, item -> item.id },
+                                    contentType = { _, _ -> "online_lyrics_candidate" }
+                                ) { _, candidate ->
                                     Surface(
                                         shape = RoundedCornerShape(12.dp),
                                         color = resultCardBg,
@@ -828,7 +1022,7 @@ fun LyricsBottomSheet(
                                             .testTag("online_lyrics_result_${candidate.id}")
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                                         ) {
@@ -838,7 +1032,12 @@ fun LyricsBottomSheet(
                                                     style = MaterialTheme.typography.titleSmall,
                                                     color = primaryFg,
                                                     maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                                                    softWrap = false,
+                                                    modifier = Modifier.basicMarquee(
+                                                        iterations = Int.MAX_VALUE,
+                                                        repeatDelayMillis = 1500,
+                                                        velocity = 30.dp
+                                                    )
                                                 )
                                                 val metaLine = buildList {
                                                     add(candidate.artist)
@@ -879,16 +1078,20 @@ fun LyricsBottomSheet(
                                 Text(
                                     text = "¿Prefieres Lyricsify?",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = secondaryFg
+                                    color = secondaryFg,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                                 TextButton(
                                     onClick = { onOpenLyricsify(onlineQuery.ifBlank { track.title }) },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                     colors = ButtonDefaults.textButtonColors(contentColor = brightAccentText),
                                     modifier = Modifier.testTag("open_lyricsify_browser_button")
                                 ) {
                                     Icon(Icons.Rounded.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Buscar en Lyricsify")
+                                    Text("Buscar en Lyricsify", maxLines = 1)
                                 }
                             }
                         }
@@ -897,44 +1100,45 @@ fun LyricsBottomSheet(
             }
 
             // Main Lyrics Display Area (fills nearly the entire view cleanly with high contrast)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                when {
-                    isLoading -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(color = brightAccentText)
+            if (hasLoadedLyrics || isLoading || !showOnlineSearch) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    when {
+                        isLoading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = brightAccentText)
+                            }
                         }
-                    }
 
-                    lyrics == null || lyrics.lines.isEmpty() -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = "No se encontró letra para esta canción",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = primaryFg,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Davoo Player puede descargar letras .lrc directamente desde LRCLIB, abrir Lyricsify en tu navegador o cargar un archivo .lrc local.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = secondaryFg,
-                                textAlign = TextAlign.Center
-                            )
+                        lyrics == null || lyrics.lines.isEmpty() -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(vertical = 24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "No se encontró letra para esta canción",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = primaryFg,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Davoo Player puede descargar letras .lrc directamente desde LRCLIB, abrir Lyricsify en tu navegador o cargar un archivo .lrc local.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = secondaryFg,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
-                    }
 
                     else -> {
                         val translatedLines = activeTranslationSuccess?.translatedLyrics?.lines
@@ -978,6 +1182,8 @@ fun LyricsBottomSheet(
                                 } else {
                                     val resolvedTranslatedText = translatedLines?.getOrNull(index)?.text
                                         ?: line.secondaryText
+                                    val cleanOriginalLine = line.text.trim()
+                                    val cleanTranslatedLine = resolvedTranslatedText?.trim()
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -986,8 +1192,8 @@ fun LyricsBottomSheet(
                                         verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         val primaryText = when {
-                                            !resolvedTranslatedText.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
-                                                resolvedTranslatedText
+                                            !cleanTranslatedLine.isNullOrBlank() && displayMode == LyricsDisplayMode.TRANSLATED ->
+                                                cleanTranslatedLine
                                             else -> line.text
                                         }
                                         Text(
@@ -1004,12 +1210,12 @@ fun LyricsBottomSheet(
                                                 primaryFg.copy(alpha = if (lyrics.isSynced) 0.44f else 0.86f)
                                             }
                                         )
-                                        if (!resolvedTranslatedText.isNullOrBlank() &&
+                                        if (!cleanTranslatedLine.isNullOrBlank() &&
                                             displayMode == LyricsDisplayMode.BILINGUAL &&
-                                            !resolvedTranslatedText.equals(line.text, ignoreCase = true)
+                                            !cleanTranslatedLine.equals(cleanOriginalLine, ignoreCase = true)
                                         ) {
                                             Text(
-                                                text = resolvedTranslatedText,
+                                                text = cleanTranslatedLine,
                                                 style = if (isActive) {
                                                     MaterialTheme.typography.bodyLarge
                                                 } else {
@@ -1020,7 +1226,8 @@ fun LyricsBottomSheet(
                                                     brightAccentText
                                                 } else {
                                                     brightAccentText.copy(alpha = if (lyrics.isSynced) 0.45f else 0.72f)
-                                                }
+                                                },
+                                                modifier = Modifier.testTag("lyrics_translated_line_$index")
                                             )
                                         }
                                     }
@@ -1071,6 +1278,9 @@ fun LyricsBottomSheet(
                         Text("Sincronizar", fontWeight = FontWeight.SemiBold)
                     }
                 }
+                }
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
             }
 
             // Minimalist Spotify-style Bottom Corner Bar: ONLY 2 discrete corner icons directly below lyrics
@@ -1199,7 +1409,7 @@ fun LyricsBottomSheet(
                                             val isModeSelected = displayMode == mode
                                             FilterChip(
                                                 selected = isModeSelected,
-                                                onClick = { displayMode = mode },
+                                                onClick = { onDisplayModeChange(mode) },
                                                 label = { Text(mode.label, style = MaterialTheme.typography.labelSmall) },
                                                 colors = FilterChipDefaults.filterChipColors(
                                                     containerColor = primaryFg.copy(alpha = 0.06f),
@@ -1238,14 +1448,21 @@ fun LyricsBottomSheet(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .testTag("lyrics_engine_selector_row"),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         TranslationEngine.entries.forEach { engine ->
                                             val isSelected = selectedEngine == engine
                                             FilterChip(
                                                 selected = isSelected,
                                                 onClick = { onSelectEngine?.invoke(engine) },
-                                                label = { Text(engine.shortLabel, style = MaterialTheme.typography.labelSmall) },
+                                                label = {
+                                                    Text(
+                                                        text = engine.shortLabel,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                },
                                                 colors = FilterChipDefaults.filterChipColors(
                                                     containerColor = primaryFg.copy(alpha = 0.06f),
                                                     labelColor = primaryFg.copy(alpha = 0.85f),
@@ -1262,6 +1479,44 @@ fun LyricsBottomSheet(
                                                     .weight(1f)
                                                     .testTag("lyrics_engine_${engine.name.lowercase()}")
                                             )
+                                        }
+                                    }
+                                    if (selectedEngine == TranslationEngine.DEEPSEEK && !hasDeepSeekApiKey) {
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("lyrics_deepseek_missing_key_notice")
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Configura tu API Key de DeepSeek para usar este motor.",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = primaryFg
+                                                )
+                                                if (onOpenTranslatorSettings != null) {
+                                                    TextButton(
+                                                        onClick = {
+                                                            showTranslateMenu = false
+                                                            onOpenTranslatorSettings()
+                                                        },
+                                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                                        modifier = Modifier.testTag("lyrics_deepseek_configure_button")
+                                                    ) {
+                                                        Text(
+                                                            text = "Opciones > Traductor de letras",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = brightAccentText
+                                                        )
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1355,8 +1610,39 @@ fun LyricsBottomSheet(
                         Spacer(modifier = Modifier.width(1.dp))
                     }
 
-                    // Bottom-Right: Compact Download / File Management Icon
-                    Box {
+                    // Bottom-Right: Optional Share Clip Icon + Compact Download / File Management Icon
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (showShareButtonInBottomBar && onShareSnippet != null) {
+                            Surface(
+                                onClick = {
+                                    val includeTrans = hasAnyTranslation && displayMode != LyricsDisplayMode.ORIGINAL
+                                    onShareSnippet(includeTrans)
+                                },
+                                shape = CircleShape,
+                                color = accentColor.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.22f)),
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("lyrics_bottom_share_button")
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(40.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Share,
+                                        contentDescription = "Compartir letra o clip",
+                                        tint = primaryFg.copy(alpha = 0.9f),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Box {
                         Surface(
                             onClick = { showManageMenu = true },
                             shape = CircleShape,
@@ -1529,24 +1815,10 @@ fun LyricsBottomSheet(
                             }
                         }
                     }
+                    }
                 }
             }
-
-            // Spotify-style Playback Progress Bar right below the two corner icons (isolated recomposition scope)
-            LyricsScrubberSection(
-                trackId = track.id,
-                fallbackPositionMs = positionMs,
-                fallbackDurationMs = durationMs.coerceAtLeast(track.durationMs),
-                livePositionFlow = livePositionFlow,
-                isPlaying = isPlaying,
-                accentColor = accentColor,
-                onAccentContent = onAccentContent,
-                secondaryFg = secondaryFg,
-                onSeekTo = onSeekTo,
-                onTogglePlayPause = onTogglePlayPause
-            )
         }
-    }
 
     if (showExportDialog && lyrics != null) {
         val suggestedName = remember(track.id) {
@@ -1641,7 +1913,6 @@ private fun formatLyricsOffsetLabel(offsetMs: Long): String {
     return String.format("%s%.1f s", sign, seconds)
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TagEditorBottomSheet(
     track: AudioTrack,
@@ -1659,10 +1930,17 @@ fun TagEditorBottomSheet(
         trackNumber: Int,
         customArtworkUri: String?
     ) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onSearchDeezerTags: suspend (track: AudioTrack, customQuery: String?) -> Result<List<DeezerTagSuggestion>> = { _, _ ->
+        Result.success(emptyList())
+    },
+    onResolveDeezerTagSuggestion: suspend (DeezerTagSuggestion) -> Pair<DeezerTagSuggestion, String?> = { it to null },
+    onApplyDeezerArtworkUri: (String?) -> Unit = {}
 ) {
+    BackHandler(onBack = onDismiss)
+
     val context = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val coroutineScope = rememberCoroutineScope()
     val fileParts = remember(track.id, track.filePath, track.contentUri) {
         com.example.data.repository.AudioTagWriter.splitFileName(track, context)
     }
@@ -1676,32 +1954,86 @@ fun TagEditorBottomSheet(
     var trackNumStr by remember(track.id) {
         mutableStateOf(if (track.trackNumber > 0) track.trackNumber.toString() else "")
     }
-    val effectiveArtwork = pickedArtworkUri ?: track.albumArtUri
+    var deezerArtworkUri by remember(track.id) { mutableStateOf<String?>(null) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+    var showDeezerPanel by remember(track.id) { mutableStateOf(false) }
+    var deezerQuery by remember(track.id) {
+        val cleanArtist = artist.takeUnless {
+            it.equals("Artista desconocido", ignoreCase = true) ||
+                it.equals("Unknown Artist", ignoreCase = true) ||
+                it.equals("<unknown>", ignoreCase = true)
+        }.orEmpty()
+        mutableStateOf(listOf(cleanArtist, title).filter { it.isNotBlank() }.joinToString(" "))
+    }
+    var isSearchingDeezer by remember(track.id) { mutableStateOf(false) }
+    var isApplyingDeezer by remember(track.id) { mutableStateOf(false) }
+    var deezerSuggestions by remember(track.id) { mutableStateOf<List<DeezerTagSuggestion>>(emptyList()) }
+    var deezerError by remember(track.id) { mutableStateOf<String?>(null) }
+    var deezerAppliedNotice by remember(track.id) { mutableStateOf<String?>(null) }
+
+    val triggerDeezerSearch: (String?) -> Unit = { explicitQuery ->
+        coroutineScope.launch {
+            isSearchingDeezer = true
+            deezerError = null
+            deezerAppliedNotice = null
+            val res = onSearchDeezerTags(
+                track.copy(title = title, artist = artist, album = album),
+                explicitQuery?.takeIf { it.isNotBlank() }
+            )
+            isSearchingDeezer = false
+            res.onSuccess { items ->
+                deezerSuggestions = items
+                if (items.isEmpty()) {
+                    deezerError = "Sin coincidencias en Deezer. Ajusta la búsqueda e inténtalo de nuevo."
+                }
+            }.onFailure { err ->
+                deezerError = err.message ?: "No se pudo consultar la API pública de Deezer."
+            }
+        }
+    }
+
+    val effectiveArtwork = pickedArtworkUri ?: deezerArtworkUri ?: track.albumArtUri
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxSize()
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .testTag("tag_editor_sheet"),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Editar etiquetas y archivo", style = MaterialTheme.typography.titleLarge)
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("close_tag_editor_button")
+                ) {
                     Icon(Icons.Rounded.Close, contentDescription = "Cerrar editor")
                 }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .testTag("tag_editor_sheet"),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1724,11 +2056,213 @@ fun TagEditorBottomSheet(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Cambiar carátula")
                     }
-                    if (pickedArtworkUri != null) {
-                        TextButton(onClick = onClearCustomCover) {
+                    if (pickedArtworkUri != null || deezerArtworkUri != null) {
+                        TextButton(
+                            onClick = {
+                                deezerArtworkUri = null
+                                onClearCustomCover()
+                            }
+                        ) {
                             Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Usar carátula original")
+                        }
+                    }
+                }
+            }
+
+            // Public Deezer Metadata Auto-fill trigger & expandable search panel
+            FilledTonalButton(
+                onClick = {
+                    val opening = !showDeezerPanel
+                    showDeezerPanel = opening
+                    if (opening && deezerSuggestions.isEmpty() && !isSearchingDeezer) {
+                        triggerDeezerSearch(deezerQuery)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("tag_editor_deezer_autofill_button")
+            ) {
+                Icon(Icons.Rounded.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Autocompletar metadatos desde Deezer")
+            }
+
+            AnimatedVisibility(visible = deezerAppliedNotice != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tag_editor_deezer_applied_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.CheckCircle,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = deezerAppliedNotice.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = showDeezerPanel) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("tag_editor_deezer_panel")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = deezerQuery,
+                                onValueChange = { deezerQuery = it },
+                                label = { Text("Buscar en Deezer (Artista / Canción)") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("tag_editor_deezer_query_input")
+                            )
+                            IconButton(
+                                onClick = { triggerDeezerSearch(deezerQuery) },
+                                enabled = !isSearchingDeezer && !isApplyingDeezer,
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("tag_editor_deezer_search_button")
+                            ) {
+                                if (isSearchingDeezer) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Rounded.Search, contentDescription = "Buscar en Deezer")
+                                }
+                            }
+                        }
+
+                        if (isApplyingDeezer) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Text(
+                                    text = "Descargando carátula HD y metadatos…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        deezerError?.let { errText ->
+                            Text(
+                                text = errText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+
+                        deezerSuggestions.forEachIndexed { idx, item ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isApplyingDeezer) {
+                                        coroutineScope.launch {
+                                            isApplyingDeezer = true
+                                            deezerError = null
+                                            val (resolved, localCoverUri) = onResolveDeezerTagSuggestion(item)
+                                            title = resolved.title.ifBlank { title }
+                                            artist = resolved.artist.ifBlank { artist }
+                                            album = resolved.album.ifBlank { album }
+                                            if (resolved.albumArtist.isNotBlank()) {
+                                                albumArtist = resolved.albumArtist
+                                            }
+                                            if (resolved.genre.isNotBlank()) {
+                                                genre = resolved.genre
+                                            }
+                                            if (resolved.year > 0) {
+                                                yearStr = resolved.year.toString()
+                                            }
+                                            if (resolved.trackNumber > 0) {
+                                                trackNumStr = resolved.trackNumber.toString()
+                                            }
+                                            if (!localCoverUri.isNullOrBlank()) {
+                                                deezerArtworkUri = localCoverUri
+                                                onApplyDeezerArtworkUri(localCoverUri)
+                                            }
+                                            isApplyingDeezer = false
+                                            showDeezerPanel = false
+                                            deezerAppliedNotice = if (!localCoverUri.isNullOrBlank()) {
+                                                "Etiquetas y carátula HD aplicadas desde Deezer. Pulsa Guardar cambios."
+                                            } else {
+                                                "Etiquetas aplicadas desde Deezer. Pulsa Guardar cambios."
+                                            }
+                                        }
+                                    }
+                                    .testTag("tag_editor_deezer_result_$idx")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    AsyncImage(
+                                        model = item.coverXlUrl,
+                                        contentDescription = item.album,
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.title,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
+                                        )
+                                        Text(
+                                            text = "${item.artist} · ${item.album}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (item.durationSec > 0) {
+                                        Text(
+                                            text = formatDuration(item.durationSec * 1000L),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1835,11 +2369,11 @@ fun TagEditorBottomSheet(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Guardar cambios")
             }
+            }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FoldersExclusionSheet(
     folders: List<FolderGroup>,
@@ -1850,17 +2384,18 @@ fun FoldersExclusionSheet(
     onAddSdCardFolder: () -> Unit = {},
     onRemoveSdCardFolder: (String) -> Unit = {}
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+    BackHandler(onBack = onDismiss)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.fillMaxSize()
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp, vertical = 14.dp)
                 .testTag("folders_exclusion_sheet"),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -1877,10 +2412,17 @@ fun FoldersExclusionSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("close_folders_button")
+                ) {
                     Icon(Icons.Rounded.Close, contentDescription = "Cerrar carpetas")
                 }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
             // SD Card / SAF folder section
             Surface(
@@ -1965,7 +2507,12 @@ fun FoldersExclusionSheet(
                                     text = sd.displayName,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    softWrap = false,
+                                    modifier = Modifier.basicMarquee(
+                                        iterations = Int.MAX_VALUE,
+                                        repeatDelayMillis = 1500,
+                                        velocity = 30.dp
+                                    )
                                 )
                                 Text(
                                     text = "${sd.trackCount} pistas indexadas",
@@ -1995,20 +2542,30 @@ fun FoldersExclusionSheet(
             )
 
             if (folders.isEmpty()) {
-                Text(
-                    text = "Aún no se han detectado carpetas.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Aún no se han detectado carpetas.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 300.dp),
+                        .weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(folders) { _, folder ->
+                    itemsIndexed(
+                        items = folders,
+                        key = { _, folder -> folder.folderName },
+                        contentType = { _, _ -> "excluded_folder_row" }
+                    ) { _, folder ->
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -2033,7 +2590,12 @@ fun FoldersExclusionSheet(
                                         text = folder.folderName,
                                         style = MaterialTheme.typography.titleSmall,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        softWrap = false,
+                                        modifier = Modifier.basicMarquee(
+                                            iterations = Int.MAX_VALUE,
+                                            repeatDelayMillis = 1500,
+                                            velocity = 30.dp
+                                        )
                                     )
                                     Text(
                                         text = "${folder.tracks.size} pistas · ${if (folder.isExcluded) "Oculta" else "Visible"}",

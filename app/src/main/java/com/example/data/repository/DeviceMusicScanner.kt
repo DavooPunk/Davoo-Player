@@ -724,6 +724,7 @@ class DeviceMusicScanner(private val context: Context) {
     companion object {
         private const val MAX_SD_TREE_DEPTH = 16
         private const val MAX_SD_TREE_TRACKS = 5000
+        private const val MISSING_DURATION_SENTINEL = -1L
         private val durationCache = LruCache<String, Long>(256)
         private val durationExtractorSemaphore = kotlinx.coroutines.sync.Semaphore(permits = 2)
         private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -746,15 +747,24 @@ class DeviceMusicScanner(private val context: Context) {
         suspend fun extractDurationFromFile(context: Context, uri: Uri): Long? {
             val key = uri.toString()
             if (key.isBlank()) return null
-            durationCache.get(key)?.let { return it }
+            durationCache.get(key)?.let { cached ->
+                return if (cached > 0L) cached else null
+            }
             return withContext(Dispatchers.IO) {
-                durationCache.get(key)?.let { return@withContext it }
+                durationCache.get(key)?.let { cached ->
+                    return@withContext if (cached > 0L) cached else null
+                }
                 durationExtractorSemaphore.withPermit {
-                    durationCache.get(key)?.let { return@withPermit it }
-                    extractDurationWithRetriever(context, uri)?.also { duration ->
-                        if (duration > 0L) {
-                            durationCache.put(key, duration)
-                        }
+                    durationCache.get(key)?.let { cached ->
+                        return@withPermit if (cached > 0L) cached else null
+                    }
+                    val extracted = extractDurationWithRetriever(context, uri)
+                    if (extracted != null && extracted > 0L) {
+                        durationCache.put(key, extracted)
+                        extracted
+                    } else {
+                        durationCache.put(key, MISSING_DURATION_SENTINEL)
+                        null
                     }
                 }
             }

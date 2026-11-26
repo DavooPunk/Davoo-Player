@@ -80,11 +80,14 @@ class PlaybackController(
     private var mediaController: MediaController? = null
     private var pendingPlayRequest: PendingPlayRequest? = null
     private var tickerJob: Job? = null
+    private var scrobbleTimerJob: Job? = null
     private var techSpecJob: Job? = null
     private var sleepTimerJob: Job? = null
     private var settingsSyncJob: Job? = null
     private var scrobbleDismissJob: Job? = null
     private var persistSnapshotJob: Job? = null
+    @Volatile
+    private var isUiForeground: Boolean = true
     @Volatile
     private var trackLookup: Map<String, AudioTrack> = emptyMap()
     private var lastRecordedTrackId: String? = null
@@ -192,11 +195,17 @@ class PlaybackController(
             }
             if (isPlaying) {
                 userHasInitiatedPlayback = true
-                startPositionTicker()
+                if (isUiForeground) {
+                    startPositionTicker()
+                }
                 recordCurrentTrackPlayIfNeeded()
-                _uiState.value.currentTrack?.let { reportLastFmNowPlayingIfNeeded(it) }
+                _uiState.value.currentTrack?.let { current ->
+                    reportLastFmNowPlayingIfNeeded(current)
+                    scheduleLastFmScrobbleIfNeeded(current, pos, dur)
+                }
             } else {
                 stopPositionTicker()
+                cancelScrobbleTimer()
                 controller?.let { persistExactSessionSnapshot(it, queueStructureChanged = false) }
             }
         }
@@ -243,7 +252,10 @@ class PlaybackController(
                     }
                     sendAudioSettingsToService(controller)
                     sendStopAfterCurrentToService(controller, _stopAfterCurrentTrack.value)
-                    if (controller.isPlaying) startPositionTicker()
+                    if (controller.isPlaying) {
+                        if (isUiForeground) startPositionTicker()
+                        scheduleLastFmScrobbleIfNeeded()
+                    }
                 }.onFailure {
                     controllerFuture = null
                 }
@@ -252,8 +264,31 @@ class PlaybackController(
         )
     }
 
+    fun setUiForeground(inForeground: Boolean) {
+        if (isUiForeground == inForeground) return
+        isUiForeground = inForeground
+        if (inForeground) {
+            val controller = mediaController ?: return
+            val pos = controller.currentPosition.coerceAtLeast(0L)
+            val dur = (controller.duration.takeIf { it > 0L }
+                ?: (_uiState.value.currentTrack?.durationMs ?: 0L)).coerceAtLeast(0L)
+            _positionState.value = PlaybackPositionState(
+                positionMs = pos,
+                durationMs = dur
+            )
+            _uiState.update { it.copy(positionMs = pos, durationMs = dur) }
+            if (controller.isPlaying) {
+                startPositionTicker()
+                scheduleLastFmScrobbleIfNeeded(positionMs = pos, durationMs = dur)
+            }
+        } else {
+            stopPositionTicker()
+        }
+    }
+
     fun release() {
         stopPositionTicker()
+        cancelScrobbleTimer()
         sleepTimerJob?.cancel()
         techSpecJob?.cancel()
         scrobbleDismissJob?.cancel()
@@ -296,6 +331,7 @@ class PlaybackController(
             playbackSpeed = newSettings.playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.5f, 2.0f) ?: 1.0f,
             stereoBalance = newSettings.stereoBalance.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         )
+        val previousSpeed = _audioSettings.value.playbackSpeed
         _audioSettings.value = sanitized
         _eqBands.value = bandHelper.getBands(sanitized)
 
@@ -310,6 +346,9 @@ class PlaybackController(
                 prefsStore.saveAudioSettings(sanitized)
                 mediaController?.let { sendAudioSettingsToService(it, sanitized) }
             }
+        }
+        if (previousSpeed != sanitized.playbackSpeed && mediaController?.isPlaying == true) {
+            scheduleLastFmScrobbleIfNeeded()
         }
     }
 
@@ -476,6 +515,9 @@ class PlaybackController(
         )
         _uiState.update { it.copy(positionMs = clamped) }
         persistExactSessionSnapshot(controller, overridePositionMs = clamped, queueStructureChanged = false)
+        if (controller.isPlaying) {
+            scheduleLastFmScrobbleIfNeeded(positionMs = clamped, durationMs = dur.coerceAtLeast(0L))
+        }
     }
 
     fun seekBackward(deltaMs: Long = 10_000L) {
@@ -966,9 +1008,12 @@ class PlaybackController(
                 putInt(PlaybackService.ARG_CROSSFADE, settings.crossfadeSeconds)
                 putBoolean(PlaybackService.ARG_GAPLESS, settings.gaplessEnabled)
                 putBoolean(PlaybackService.ARG_REPLAYGAIN, settings.replayGainEnabled)
+                putFloat(PlaybackService.ARG_REPLAYGAIN_PREAMP_DB, settings.replayGainPreampDb)
+                putFloat(PlaybackService.ARG_REPLAYGAIN_UNTAGGED_PREAMP_DB, settings.replayGainUntaggedPreampDb)
                 putFloat(PlaybackService.ARG_SPEED, settings.playbackSpeed)
                 putFloat(PlaybackService.ARG_BALANCE, settings.stereoBalance)
                 putBoolean(PlaybackService.ARG_DYNAMIC_COLORS, settings.dynamicArtworkColors)
+                putBoolean(PlaybackService.ARG_FADE_ON_PAUSE, settings.fadeOnPauseEnabled)
             }
             controller.sendCustomCommand(
                 SessionCommand(PlaybackService.ACTION_APPLY_AUDIO_SETTINGS, Bundle.EMPTY),
@@ -1027,6 +1072,7 @@ class PlaybackController(
             if (player.isPlaying) {
                 recordCurrentTrackPlayIfNeeded()
                 reportLastFmNowPlayingIfNeeded(currentTrack)
+                scheduleLastFmScrobbleIfNeeded(currentTrack, pos, safeDur)
             }
         } else if (currentTrack == null) {
             resetCurrentScrobbleSession()
@@ -1035,11 +1081,53 @@ class PlaybackController(
         }
     }
 
+    private fun cancelScrobbleTimer() {
+        scrobbleTimerJob?.cancel()
+        scrobbleTimerJob = null
+    }
+
     private fun resetCurrentScrobbleSession() {
+        cancelScrobbleTimer()
         currentScrobbleTrackId = null
         currentScrobbleStartEpochSec = 0L
         nowPlayingReportedForSession = false
         scrobbledCurrentSession = false
+    }
+
+    private fun scheduleLastFmScrobbleIfNeeded(
+        track: AudioTrack? = _uiState.value.currentTrack,
+        positionMs: Long? = null,
+        durationMs: Long? = null
+    ) {
+        cancelScrobbleTimer()
+        val lfm = lastFmRepository ?: return
+        if (!lfm.hasActiveSession() || scrobbledCurrentSession) return
+        val controller = mediaController ?: return
+        if (!controller.isPlaying) return
+        val currentTrack = track ?: _uiState.value.currentTrack ?: return
+        val dur = (durationMs ?: controller.duration.takeIf { it > 0L } ?: currentTrack.durationMs)
+            .coerceAtLeast(0L)
+        if (dur <= 0L) return
+        val pos = (positionMs ?: controller.currentPosition).coerceAtLeast(0L)
+        val thresholdMs = LastFmScrobblePolicy.computeThresholdMs(currentTrack.id, dur)
+        if (pos >= thresholdMs) {
+            maybeSendLastFmScrobble(currentTrack, pos, dur)
+            return
+        }
+        val speed = _audioSettings.value.playbackSpeed.coerceAtLeast(0.5f)
+        val delayMs = (((thresholdMs - pos).toDouble() / speed).toLong() + 100L).coerceAtLeast(50L)
+        scrobbleTimerJob = scope.launch {
+            delay(delayMs)
+            val c = mediaController ?: return@launch
+            if (!c.isPlaying) return@launch
+            val active = _uiState.value.currentTrack ?: return@launch
+            if (active.id != currentTrack.id) return@launch
+            val livePos = c.currentPosition.coerceAtLeast(0L)
+            val liveDur = (c.duration.takeIf { it > 0L } ?: active.durationMs).coerceAtLeast(0L)
+            if (liveDur > 0L) {
+                maybeSendLastFmScrobble(active, livePos, liveDur)
+            }
+        }
     }
 
     private fun reportLastFmNowPlayingIfNeeded(track: AudioTrack) {
@@ -1124,9 +1212,9 @@ class PlaybackController(
     }
 
     private fun startPositionTicker() {
-        if (tickerJob?.isActive == true) return
+        if (!isUiForeground || tickerJob?.isActive == true) return
         tickerJob = scope.launch {
-            while (isActive) {
+            while (isActive && isUiForeground) {
                 val controller = mediaController ?: break
                 if (!controller.isPlaying) break
                 val pos = controller.currentPosition.coerceAtLeast(0L)
@@ -1137,11 +1225,11 @@ class PlaybackController(
                     positionMs = pos,
                     durationMs = dur
                 )
-                if (currentTrack != null && dur > 0L) {
+                if (!scrobbledCurrentSession && currentTrack != null && dur > 0L) {
                     maybeSendLastFmScrobble(currentTrack, pos, dur)
                 }
                 val now = System.currentTimeMillis()
-                if (now - lastPeriodicExactSaveMs >= 5_000L) {
+                if (now - lastPeriodicExactSaveMs >= 15_000L) {
                     lastPeriodicExactSaveMs = now
                     persistExactSessionSnapshot(controller, overridePositionMs = pos, queueStructureChanged = false)
                 }

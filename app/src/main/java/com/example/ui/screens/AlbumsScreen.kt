@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.runtime.Immutable
 import com.example.model.AlbumGroup
 import com.example.model.ArtistGroup
 import com.example.model.AudioFormat
@@ -117,6 +123,7 @@ fun AlbumsScreen(
 ) {
     var selectedTab by remember { mutableStateOf(CollectionTab.ALBUMS) }
     var activeDrilldownKey by remember { mutableStateOf<CollectionDrilldownKey?>(null) }
+    var currentFolderPath by remember { mutableStateOf<List<String>>(emptyList()) }
 
     LaunchedEffect(requestedArtistName) {
         if (!requestedArtistName.isNullOrBlank()) {
@@ -377,7 +384,14 @@ fun AlbumsScreen(
                                         text = album.albumName,
                                         style = MaterialTheme.typography.titleSmall,
                                         maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        softWrap = false,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .basicMarquee(
+                                                iterations = Int.MAX_VALUE,
+                                                repeatDelayMillis = 1500,
+                                                velocity = 30.dp
+                                            )
                                     )
                                     val albumMetaParts = buildList {
                                         if (album.artist.isNotBlank()) add(album.artist)
@@ -452,7 +466,14 @@ fun AlbumsScreen(
                                                 text = artist.artistName,
                                                 style = MaterialTheme.typography.titleMedium,
                                                 maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
+                                                softWrap = false,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .basicMarquee(
+                                                        iterations = Int.MAX_VALUE,
+                                                        repeatDelayMillis = 1500,
+                                                        velocity = 30.dp
+                                                    )
                                             )
                                             Text(
                                                 text = "${artist.albumCount} álbumes · ${artist.tracks.size} canciones · ${formatDuration(artist.totalDurationMs)}",
@@ -533,7 +554,14 @@ fun AlbumsScreen(
                                             text = genre.genreName,
                                             style = MaterialTheme.typography.titleMedium,
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            softWrap = false,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .basicMarquee(
+                                                    iterations = Int.MAX_VALUE,
+                                                    repeatDelayMillis = 1500,
+                                                    velocity = 30.dp
+                                                )
                                         )
                                         Text(
                                             text = "${genre.tracks.size} canciones · ${formatDuration(genre.totalDurationMs)}",
@@ -556,62 +584,233 @@ fun AlbumsScreen(
                         subtitle = "Escanea el dispositivo para explorar por carpetas."
                     )
                 } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = 4.dp,
-                            bottom = bottomContentPadding.calculateBottomPadding() + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(folders, key = { it.folderName }, contentType = { "folder_row" }) { folder ->
-                            Surface(
+                    BackHandler(enabled = currentFolderPath.isNotEmpty()) {
+                        currentFolderPath = currentFolderPath.dropLast(1)
+                    }
+                    val folderSnapshot = remember(folders, currentFolderPath) {
+                        FolderBrowserTree.buildView(folders, currentFolderPath)
+                    }
+
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (currentFolderPath.isNotEmpty()) {
+                            Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable {
-                                        if (!folder.isExcluded) {
-                                            activeDrilldownKey = CollectionDrilldownKey(
-                                                source = DrilldownSource.FOLDER,
-                                                name = folder.folderName
-                                            )
-                                        }
-                                    }
-                                    .testTag("folder_row_${folder.folderName}"),
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainer
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .testTag("folder_breadcrumbs_row"),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Surface(
+                                    onClick = { currentFolderPath = emptyList() },
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    modifier = Modifier.testTag("folder_breadcrumb_root")
                                 ) {
-                                    Icon(
-                                        imageVector = if (folder.isExcluded) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
-                                        contentDescription = null,
-                                        tint = if (folder.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = folder.folderName,
-                                            style = MaterialTheme.typography.titleMedium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Home,
+                                            contentDescription = "Ir a carpeta raíz",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = MaterialTheme.colorScheme.primary
                                         )
                                         Text(
-                                            text = "${folder.tracks.size} canciones · ${if (folder.isExcluded) "Oculta" else formatDuration(folder.totalDurationMs)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            text = "Raíz",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurface
                                         )
                                     }
-                                    Switch(
-                                        checked = !folder.isExcluded,
-                                        onCheckedChange = {
-                                            onToggleFolderExclude(folder.folderName, folder.isExcluded)
+                                }
+                                currentFolderPath.forEachIndexed { idx, segment ->
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    val isLast = idx == currentFolderPath.lastIndex
+                                    Surface(
+                                        onClick = {
+                                            if (!isLast) {
+                                                currentFolderPath = currentFolderPath.take(idx + 1)
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(100.dp),
+                                        color = if (isLast) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHigh
+                                        },
+                                        modifier = Modifier.testTag("folder_breadcrumb_$idx")
+                                    ) {
+                                        Text(
+                                            text = segment,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = if (isLast) {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (folderSnapshot.subfolders.isEmpty() && folderSnapshot.directTracks.isEmpty()) {
+                            EmptyCollectionPlaceholder(
+                                icon = Icons.Rounded.FolderOff,
+                                title = "Carpeta vacía o excluida",
+                                subtitle = "Vuelve atrás para explorar otras carpetas."
+                            )
+                        } else {
+                            LazyColumn(
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 4.dp,
+                                    bottom = bottomContentPadding.calculateBottomPadding() + 16.dp
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .testTag("folders_browser_list")
+                            ) {
+                                if (currentFolderPath.isNotEmpty() && folderSnapshot.subtreeTracks.isNotEmpty()) {
+                                    item(key = "folder_subtree_actions") {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Button(
+                                                onClick = { onPlayTracks(folderSnapshot.subtreeTracks, 0) },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("folder_play_all_button")
+                                            ) {
+                                                Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Reproducir (${folderSnapshot.subtreeTracks.size})")
+                                            }
+                                            OutlinedButton(
+                                                onClick = { onShuffleTracks(folderSnapshot.subtreeTracks) },
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("folder_shuffle_all_button")
+                                            ) {
+                                                Icon(Icons.Rounded.Shuffle, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Aleatorio")
+                                            }
                                         }
+                                    }
+                                }
+
+                                items(
+                                    items = folderSnapshot.subfolders,
+                                    key = { "dir_${it.nextPathSegments.joinToString("/")}" },
+                                    contentType = { "folder_row" }
+                                ) { node ->
+                                    val rowTag = node.directFolderGroupName ?: node.name
+                                    Surface(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable(enabled = !node.isExcluded) {
+                                                currentFolderPath = node.nextPathSegments
+                                            }
+                                            .testTag("folder_row_$rowTag"),
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.surfaceContainer
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = if (node.isExcluded) Icons.Rounded.FolderOff else Icons.Rounded.Folder,
+                                                contentDescription = null,
+                                                tint = if (node.isExcluded) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(32.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(12.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = node.name,
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .basicMarquee(
+                                                            iterations = Int.MAX_VALUE,
+                                                            repeatDelayMillis = 1500,
+                                                            velocity = 30.dp
+                                                        )
+                                                )
+                                                val meta = buildList {
+                                                    if (node.childFolderCount > 0) {
+                                                        add("${node.childFolderCount} subcarpetas")
+                                                    }
+                                                    add("${node.totalTracks} canciones")
+                                                    add(
+                                                        if (node.isExcluded) "Oculta"
+                                                        else formatDuration(node.totalDurationMs)
+                                                    )
+                                                }.joinToString(" · ")
+                                                Text(
+                                                    text = meta,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            if (node.directFolderGroupName != null) {
+                                                Switch(
+                                                    checked = !node.isExcluded,
+                                                    onCheckedChange = {
+                                                        onToggleFolderExclude(node.directFolderGroupName, node.isExcluded)
+                                                    }
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                                    contentDescription = "Abrir subcarpeta",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                itemsIndexed(
+                                    items = folderSnapshot.directTracks,
+                                    key = { _, track -> "folder_track_${track.id}" },
+                                    contentType = { _, _ -> "track" }
+                                ) { index, track ->
+                                    val isCurrent = playbackState.currentTrack?.id == track.id
+                                    TrackRow(
+                                        track = track,
+                                        isCurrentTrack = isCurrent,
+                                        isPlaying = isCurrent && playbackState.isPlaying,
+                                        onClick = { onPlayTracks(folderSnapshot.directTracks, index) },
+                                        onPlayNext = { onPlayNext(track) },
+                                        onAddToQueue = { onAddToQueue(track) },
+                                        onAddToPlaylist = { onAddToPlaylist(track) },
+                                        onShowMetadata = { onShowMetadata(track) },
+                                        onToggleFavorite = { onToggleFavorite(track) },
+                                        onShowLyrics = { onShowLyrics(track) },
+                                        onEditTags = { onEditTags(track) },
+                                        onDeleteFromDevice = onDeleteTrack?.let { cb -> { cb(track) } }
                                     )
                                 }
                             }
@@ -792,5 +991,122 @@ fun AlbumDetailScreen(
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
         }
+    }
+}
+
+@Immutable
+data class FolderSubdirectoryNode(
+    val name: String,
+    val nextPathSegments: List<String>,
+    val totalTracks: Int,
+    val totalDurationMs: Long,
+    val childFolderCount: Int,
+    val directFolderGroupName: String?,
+    val isExcluded: Boolean,
+    val subtreeTracks: List<AudioTrack>
+)
+
+@Immutable
+data class FolderBrowserSnapshot(
+    val currentSegments: List<String>,
+    val subfolders: List<FolderSubdirectoryNode>,
+    val directTracks: List<AudioTrack>,
+    val subtreeTracks: List<AudioTrack>
+)
+
+object FolderBrowserTree {
+    private val emulatedRootRegex = Regex("^/(?:storage/emulated/\\d+|storage/self/primary|mnt/sdcard|sdcard)/+", RegexOption.IGNORE_CASE)
+    private val genericStoragePrefixRegex = Regex("^/storage/+", RegexOption.IGNORE_CASE)
+
+    fun normalizeSegments(track: AudioTrack): List<String> {
+        val rawPath = track.filePath.trim().replace('\\', '/')
+        if (rawPath.isNotEmpty() && rawPath.contains('/')) {
+            val dirPath = rawPath.substringBeforeLast('/', "")
+            val stripped = dirPath
+                .replace(emulatedRootRegex, "")
+                .replace(genericStoragePrefixRegex, "")
+                .trim('/')
+            val segments = stripped.split('/')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            if (segments.isNotEmpty()) return segments
+        }
+        return listOf(track.folderName.ifBlank { "Música" })
+    }
+
+    fun buildView(
+        folders: List<FolderGroup>,
+        currentSegments: List<String>
+    ): FolderBrowserSnapshot {
+        val directTracks = ArrayList<AudioTrack>()
+        val subtreeTracks = ArrayList<AudioTrack>()
+
+        class MutableBucket {
+            var totalTracks = 0
+            var totalDurationMs = 0L
+            val childSubdirs = LinkedHashSet<String>()
+            val folderGroupNames = LinkedHashSet<String>()
+            var allExcluded = true
+            val playableTracks = ArrayList<AudioTrack>()
+        }
+
+        val buckets = LinkedHashMap<String, MutableBucket>()
+
+        for (group in folders) {
+            for (track in group.tracks) {
+                val segments = normalizeSegments(track)
+                if (segments.size < currentSegments.size) continue
+                if (currentSegments.isNotEmpty() && segments.subList(0, currentSegments.size) != currentSegments) {
+                    continue
+                }
+
+                if (segments.size == currentSegments.size) {
+                    if (!group.isExcluded) {
+                        directTracks.add(track)
+                        subtreeTracks.add(track)
+                    }
+                } else {
+                    val childName = segments[currentSegments.size]
+                    val bucket = buckets.getOrPut(childName) { MutableBucket() }
+                    bucket.totalTracks++
+                    bucket.totalDurationMs += track.durationMs.coerceAtLeast(0L)
+                    if (!group.isExcluded) {
+                        bucket.allExcluded = false
+                        bucket.playableTracks.add(track)
+                        subtreeTracks.add(track)
+                    }
+                    if (segments.size > currentSegments.size + 1) {
+                        bucket.childSubdirs.add(segments[currentSegments.size + 1])
+                    } else {
+                        bucket.folderGroupNames.add(group.folderName)
+                    }
+                }
+            }
+        }
+
+        val subfolderNodes = buckets.entries
+            .sortedBy { it.key.lowercase() }
+            .map { (name, bucket) ->
+                val directGroup = if (bucket.childSubdirs.isEmpty() && bucket.folderGroupNames.size == 1) {
+                    bucket.folderGroupNames.first()
+                } else null
+                FolderSubdirectoryNode(
+                    name = name,
+                    nextPathSegments = currentSegments + name,
+                    totalTracks = bucket.totalTracks,
+                    totalDurationMs = bucket.totalDurationMs,
+                    childFolderCount = bucket.childSubdirs.size,
+                    directFolderGroupName = directGroup,
+                    isExcluded = directGroup != null && bucket.allExcluded,
+                    subtreeTracks = bucket.playableTracks
+                )
+            }
+
+        return FolderBrowserSnapshot(
+            currentSegments = currentSegments,
+            subfolders = subfolderNodes,
+            directTracks = directTracks,
+            subtreeTracks = subtreeTracks
+        )
     }
 }

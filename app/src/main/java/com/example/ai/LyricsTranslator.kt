@@ -18,8 +18,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -47,6 +51,11 @@ enum class TranslationEngine(
         displayName = "Google Traductor",
         shortLabel = "Google",
         description = "Rápido y sin clave API, con limpieza de modismos"
+    ),
+    DEEPSEEK(
+        displayName = "DeepSeek",
+        shortLabel = "DeepSeek",
+        description = "Traducción poética y contextual con IA usando tu API de DeepSeek"
     );
 
     companion object {
@@ -57,7 +66,7 @@ enum class TranslationEngine(
 }
 
 /**
- * Supported target languages for DeepL API v2, Google Translate, and saved offline human translations.
+ * Supported target languages for DeepL API v2, Google Translate, DeepSeek AI, and saved offline human translations.
  */
 enum class LyricsTranslationLanguage(
     val code: String,
@@ -114,6 +123,13 @@ sealed interface LyricsTranslationUiState {
     ) : LyricsTranslationUiState
 }
 
+sealed interface DeepSeekTestUiState {
+    data object Idle : DeepSeekTestUiState
+    data object Testing : DeepSeekTestUiState
+    data class Success(val message: String) : DeepSeekTestUiState
+    data class Error(val message: String) : DeepSeekTestUiState
+}
+
 fun interface LyricsTranslator {
     suspend fun translate(
         trackTitle: String,
@@ -124,6 +140,10 @@ fun interface LyricsTranslator {
 }
 
 class DeepLConfigurationException(message: String) : IllegalStateException(message)
+
+class DeepSeekConfigurationException(message: String) : IllegalStateException(message)
+
+class LyricsTranslationNetworkException(message: String) : IOException(message)
 
 /**
  * Direct search URL builders for human-translated song lyrics websites (no scraping, Play-safe).
@@ -492,14 +512,328 @@ class GoogleLyricsTranslator(
     }
 }
 
+@Serializable
+private data class DeepSeekMessage(
+    val role: String,
+    val content: String
+)
+
+@Serializable
+private data class DeepSeekResponseFormat(
+    val type: String = "json_object"
+)
+
+@Serializable
+private data class DeepSeekChatRequest(
+    val model: String = "deepseek-chat",
+    val messages: List<DeepSeekMessage>,
+    val temperature: Double = 0.3,
+    @SerialName("response_format")
+    val responseFormat: DeepSeekResponseFormat = DeepSeekResponseFormat("json_object"),
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null
+)
+
+@Serializable
+private data class DeepSeekChoice(
+    val message: DeepSeekMessage? = null
+)
+
+@Serializable
+private data class DeepSeekChatResponse(
+    val choices: List<DeepSeekChoice> = emptyList()
+)
+
+@Serializable
+private data class DeepSeekLyricLineItem(
+    val index: Int,
+    val text: String
+)
+
+@Serializable
+private data class DeepSeekLyricPayload(
+    val title: String,
+    val artist: String,
+    @SerialName("target_language")
+    val targetLanguage: String,
+    val lines: List<DeepSeekLyricLineItem>
+)
+
+@Serializable
+private data class DeepSeekTranslationsEnvelope(
+    val translations: List<DeepSeekLyricLineItem> = emptyList(),
+    val lines: List<DeepSeekLyricLineItem> = emptyList()
+)
+
 /**
- * Coordinates engine selection (DeepL or Google), in-memory + persistent Room caching,
+ * DeepSeek AI chat/completions translator (`https://api.deepseek.com/chat/completions`) using
+ * `deepseek-chat`, `temperature = 0.3`, and `response_format = {"type": "json_object"}`.
+ * Sends all non-empty lyric lines in a single indexed JSON request to preserve poetic context,
+ * idioms, and exact 1-to-1 `.lrc` line timestamps.
+ */
+class DeepSeekLyricsTranslator(
+    private val apiKeyProvider: () -> String = { "" },
+    private val client: OkHttpClient = sharedHttpClient,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val endpointUrl: String = DEEPSEEK_ENDPOINT
+) : LyricsTranslator {
+
+    override suspend fun translate(
+        trackTitle: String,
+        trackArtist: String,
+        lyrics: LyricsData,
+        targetLanguage: LyricsTranslationLanguage
+    ): LyricsData = withContext(ioDispatcher) {
+        if (lyrics.lines.isEmpty()) return@withContext lyrics
+
+        val apiKey = apiKeyProvider().trim()
+        if (!isValidApiKey(apiKey)) {
+            throw DeepSeekConfigurationException(
+                "Configura tu API Key de DeepSeek en Opciones > Traductor de letras para usar este motor."
+            )
+        }
+
+        val nonEmptyIndices = mutableListOf<Int>()
+        val indexedItems = mutableListOf<DeepSeekLyricLineItem>()
+        lyrics.lines.forEachIndexed { idx, line ->
+            val trimmed = line.text.trim()
+            if (!line.isInstrumental && trimmed.isNotEmpty()) {
+                val seqIndex = indexedItems.size
+                nonEmptyIndices.add(idx)
+                indexedItems.add(DeepSeekLyricLineItem(index = seqIndex, text = trimmed))
+            }
+        }
+        if (indexedItems.isEmpty()) return@withContext lyrics
+
+        val userPayload = DeepSeekLyricPayload(
+            title = trackTitle.trim().ifEmpty { "Unknown" },
+            artist = trackArtist.trim().takeUnless {
+                it.equals("Artista desconocido", ignoreCase = true) ||
+                    it.equals("<unknown>", ignoreCase = true)
+            }.orEmpty(),
+            targetLanguage = "${targetLanguage.displayName} (${targetLanguage.code})",
+            lines = indexedItems
+        )
+
+        val targetLangLabel = "${targetLanguage.displayName} (${targetLanguage.code})"
+        val systemPrompt = buildString {
+            append("Eres un traductor experto de letras de canciones con sensibilidad poética. ")
+            append("Traduce cada verso numerado al idioma destino solicitado ($targetLangLabel), preservando el sentido poético, metáforas, modismos, matices emocionales y el índice exacto de cada línea.\n")
+            append("Regla estricta obligatoria:\n")
+            append("- La canción puede estar escrita en uno o varios idiomas mezclados dentro de la misma letra o incluso dentro del mismo verso (por ejemplo: español con inglés, japonés con inglés, coreano con inglés, etc.). Tu tarea es traducir absolutamente TODAS las líneas y TODAS las palabras o frases en idiomas extranjeros al idioma destino solicitado ($targetLangLabel), sin importar cuál sea el idioma principal de la canción.\n")
+            append("- Nunca dejes versos completos ni palabras sueltas en inglés u otro idioma sin traducir al idioma destino (salvo nombres propios de personas o lugares). Por ejemplo, si el idioma destino es Español, tanto una canción en español con versos en inglés como una en japonés con versos en inglés deben quedar 100% traducidas al español.\n")
+            append("- Si una línea ya está íntegramente en $targetLangLabel sin palabras ni frases extranjeras, consérvala intacta en su mismo índice.\n")
+            append("Responde ÚNICAMENTE con un objeto JSON válido usando el esquema {\"translations\":[{\"index\":0,\"text\":\"...\"}]}. ")
+            append("Incluye cada índice de entrada una sola vez y no fusiones, omitas ni agregues líneas.")
+        }
+
+        val requestPayload = DeepSeekChatRequest(
+            model = MODEL_NAME,
+            messages = listOf(
+                DeepSeekMessage(role = "system", content = systemPrompt),
+                DeepSeekMessage(role = "user", content = sharedJson.encodeToString(userPayload))
+            ),
+            temperature = DEFAULT_TEMPERATURE,
+            responseFormat = DeepSeekResponseFormat("json_object")
+        )
+
+        val bodyJson = sharedJson.encodeToString(requestPayload)
+        val request = Request.Builder()
+            .url(endpointUrl)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", "application/json")
+            .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val rawResponseBody = executeWithMappedErrors(request)
+        val parsedTranslations = parseTranslationsFromChatResponse(rawResponseBody, indexedItems.size)
+        if (parsedTranslations.isEmpty()) {
+            throw LyricsTranslationNetworkException(
+                "DeepSeek devolvió una respuesta vacía o incompatible. Intenta de nuevo."
+            )
+        }
+
+        val translatedMap = HashMap<Int, String>(nonEmptyIndices.size)
+        nonEmptyIndices.forEachIndexed { seqIdx, originalLineIdx ->
+            val translatedText = parsedTranslations[seqIdx]?.trim()
+            if (!translatedText.isNullOrEmpty()) {
+                translatedMap[originalLineIdx] = translatedText
+            }
+        }
+
+        val alignedLines = lyrics.lines.mapIndexed { idx, original ->
+            val translatedText = translatedMap[idx]
+            if (translatedText != null) {
+                LyricLine(timestampMs = original.timestampMs, text = translatedText)
+            } else {
+                original
+            }
+        }
+
+        LyricsData(
+            lines = alignedLines,
+            isSynced = lyrics.isSynced,
+            sourceLabel = "DeepSeek (${targetLanguage.displayName})"
+        )
+    }
+
+    suspend fun testConnection(apiKeyOverride: String? = null): Result<String> = withContext(ioDispatcher) {
+        runCatching {
+            val apiKey = (apiKeyOverride ?: apiKeyProvider()).trim()
+            if (!isValidApiKey(apiKey)) {
+                throw DeepSeekConfigurationException(
+                    "Ingresa una API Key de DeepSeek válida antes de probar la conexión."
+                )
+            }
+            val pingRequest = DeepSeekChatRequest(
+                model = MODEL_NAME,
+                messages = listOf(
+                    DeepSeekMessage(role = "system", content = "Reply with JSON object {\"status\":\"ok\"}."),
+                    DeepSeekMessage(role = "user", content = "ping")
+                ),
+                temperature = DEFAULT_TEMPERATURE,
+                responseFormat = DeepSeekResponseFormat("json_object"),
+                maxTokens = 24
+            )
+            val request = Request.Builder()
+                .url(endpointUrl)
+                .header("Authorization", "Bearer $apiKey")
+                .header("Content-Type", "application/json")
+                .post(sharedJson.encodeToString(pingRequest).toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val raw = executeWithMappedErrors(request)
+            val chatResp = sharedJson.decodeFromString<DeepSeekChatResponse>(raw)
+            val content = chatResp.choices.firstOrNull()?.message?.content.orEmpty()
+            if (content.isBlank()) {
+                throw LyricsTranslationNetworkException("DeepSeek respondió sin contenido válido.")
+            }
+            "Conexión exitosa con DeepSeek AI"
+        }
+    }
+
+    private fun executeWithMappedErrors(request: Request): String {
+        try {
+            client.newCall(request).execute().use { response ->
+                val rawBody = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    when (response.code) {
+                        401 -> throw DeepSeekConfigurationException(
+                            "API Key de DeepSeek inválida (HTTP 401). Revísala en Opciones > Traductor de letras."
+                        )
+                        402 -> throw LyricsTranslationNetworkException(
+                            "Saldo insuficiente en tu cuenta de DeepSeek (HTTP 402). Verifica tu crédito o cambia de motor."
+                        )
+                        429 -> throw LyricsTranslationNetworkException(
+                            "Límite de peticiones de DeepSeek alcanzado (HTTP 429). Intenta en unos segundos."
+                        )
+                        else -> throw LyricsTranslationNetworkException(
+                            "DeepSeek respondió HTTP ${response.code}. Intenta de nuevo más tarde."
+                        )
+                    }
+                }
+                return rawBody
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (ce: DeepSeekConfigurationException) {
+            throw ce
+        } catch (ne: LyricsTranslationNetworkException) {
+            throw ne
+        } catch (e: java.net.SocketTimeoutException) {
+            throw LyricsTranslationNetworkException(
+                "Tiempo de espera agotado al conectar con DeepSeek. Revisa tu conexión."
+            )
+        } catch (e: IOException) {
+            throw LyricsTranslationNetworkException(
+                "No se pudo conectar con DeepSeek. Verifica tu conexión a internet."
+            )
+        }
+    }
+
+    companion object {
+        const val DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
+        const val MODEL_NAME = "deepseek-chat"
+        const val DEFAULT_TEMPERATURE = 0.3
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        fun isValidApiKey(apiKey: String?): Boolean {
+            val trimmed = apiKey?.trim().orEmpty()
+            return trimmed.length >= 8 && !trimmed.startsWith("YOUR_", ignoreCase = true)
+        }
+
+        fun parseTranslationsFromChatResponse(rawResponseJson: String, expectedCount: Int): Map<Int, String> {
+            val chatResponse = sharedJson.decodeFromString<DeepSeekChatResponse>(rawResponseJson)
+            val content = chatResponse.choices.firstOrNull()?.message?.content?.trim().orEmpty()
+            if (content.isEmpty()) return emptyMap()
+
+            val cleanedJson = stripMarkdownJsonFence(content)
+            val result = LinkedHashMap<Int, String>(expectedCount)
+
+            val envelope = runCatching {
+                sharedJson.decodeFromString<DeepSeekTranslationsEnvelope>(cleanedJson)
+            }.getOrNull()
+            val primaryList = envelope?.translations?.takeIf { it.isNotEmpty() } ?: envelope?.lines.orEmpty()
+            if (primaryList.isNotEmpty()) {
+                primaryList.forEach { item ->
+                    val txt = item.text.trim()
+                    if (txt.isNotEmpty()) {
+                        result[item.index] = txt
+                    }
+                }
+                if (result.isNotEmpty()) return result
+            }
+
+            // Fallback tolerance for alternative valid JSON structures (e.g., {"0": "...", "1": "..."} or string array)
+            val root = runCatching { sharedJson.parseToJsonElement(cleanedJson) }.getOrNull()
+            if (root is JsonObject) {
+                val arrayNode = (root["translations"] as? JsonArray) ?: (root["lines"] as? JsonArray)
+                if (arrayNode != null) {
+                    arrayNode.forEachIndexed { idx, el ->
+                        when (el) {
+                            is JsonPrimitive -> el.content.trim().takeIf { it.isNotEmpty() }?.let { result[idx] = it }
+                            is JsonObject -> {
+                                val lineIdx = el["index"]?.jsonPrimitive?.intOrNull ?: idx
+                                val lineTxt = el["text"]?.jsonPrimitive?.content?.trim()
+                                    ?: el["translation"]?.jsonPrimitive?.content?.trim()
+                                if (!lineTxt.isNullOrEmpty()) result[lineIdx] = lineTxt
+                            }
+                            else -> Unit
+                        }
+                    }
+                } else {
+                    for ((k, v) in root) {
+                        val keyIdx = k.toIntOrNull() ?: continue
+                        val lineTxt = (v as? JsonPrimitive)?.content?.trim() ?: continue
+                        if (lineTxt.isNotEmpty()) result[keyIdx] = lineTxt
+                    }
+                }
+            }
+            return result
+        }
+
+        private fun stripMarkdownJsonFence(raw: String): String {
+            var trimmed = raw.trim()
+            if (trimmed.startsWith("```")) {
+                trimmed = trimmed.removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+                if (trimmed.endsWith("```")) {
+                    trimmed = trimmed.removeSuffix("```")
+                }
+            }
+            return trimmed.trim()
+        }
+    }
+}
+
+/**
+ * Coordinates engine selection (DeepL, Google, or DeepSeek), in-memory + persistent Room caching,
  * cancellation, and UI state for lyrics translation.
  */
 class LyricsTranslationCoordinator(
     private val scope: CoroutineScope,
     private val deepLTranslator: LyricsTranslator = DeepLLyricsTranslator(),
     private val googleTranslator: LyricsTranslator = GoogleLyricsTranslator(),
+    private val deepSeekTranslator: LyricsTranslator = DeepSeekLyricsTranslator(),
     private val onPersistTranslation: (suspend (trackId: String, language: LyricsTranslationLanguage, translated: LyricsData) -> Unit)? = null
 ) {
     private data class CacheKey(
@@ -530,6 +864,7 @@ class LyricsTranslationCoordinator(
     ) {
         activeJob?.cancel()
         val detectedEngine = when {
+            translatedLyrics.sourceLabel.contains("DeepSeek", ignoreCase = true) -> TranslationEngine.DEEPSEEK
             translatedLyrics.sourceLabel.contains("Google", ignoreCase = true) -> TranslationEngine.GOOGLE
             translatedLyrics.sourceLabel.contains("DeepL", ignoreCase = true) -> TranslationEngine.DEEPL
             else -> null
@@ -552,23 +887,27 @@ class LyricsTranslationCoordinator(
         trackArtist: String,
         lyrics: LyricsData,
         targetLanguage: LyricsTranslationLanguage,
-        engine: TranslationEngine = TranslationEngine.DEEPL
+        engine: TranslationEngine = TranslationEngine.DEEPL,
+        forceRefresh: Boolean = false
     ) {
         val signature = lyrics.lines.hashCode()
         val key = CacheKey(trackId, signature, targetLanguage, engine)
-        cache[key]?.let { cached ->
-            _state.value = LyricsTranslationUiState.Success(
-                trackId = trackId,
-                language = targetLanguage,
-                translatedLyrics = cached,
-                isSavedOffline = true
-            )
-            return
+        if (!forceRefresh) {
+            cache[key]?.let { cached ->
+                _state.value = LyricsTranslationUiState.Success(
+                    trackId = trackId,
+                    language = targetLanguage,
+                    translatedLyrics = cached,
+                    isSavedOffline = true
+                )
+                return
+            }
         }
 
         val translator = when (engine) {
             TranslationEngine.DEEPL -> deepLTranslator
             TranslationEngine.GOOGLE -> googleTranslator
+            TranslationEngine.DEEPSEEK -> deepSeekTranslator
         }
 
         activeJob?.cancel()
@@ -601,13 +940,31 @@ class LyricsTranslationCoordinator(
                     engine = engine,
                     message = e.message ?: "Configura tu clave DEEPL_API_KEY en Secrets o cambia a Google Traductor."
                 )
+            } catch (e: DeepSeekConfigurationException) {
+                Log.w(TAG, "DeepSeek key configuration issue: ${e.message}")
+                _state.value = LyricsTranslationUiState.Error(
+                    language = targetLanguage,
+                    engine = engine,
+                    message = e.message ?: "Configura tu API Key de DeepSeek en Opciones > Traductor de letras."
+                )
+            } catch (e: LyricsTranslationNetworkException) {
+                Log.w(TAG, "Translation service error (${engine.name}): ${e.message}")
+                _state.value = LyricsTranslationUiState.Error(
+                    language = targetLanguage,
+                    engine = engine,
+                    message = e.message ?: "No se pudo conectar con ${engine.displayName}. Verifica tu conexión o cambia de traductor."
+                )
             } catch (e: IOException) {
                 Log.w(TAG, "Translation network error (${engine.name}): ${e.message}")
                 _state.value = LyricsTranslationUiState.Error(
                     language = targetLanguage,
                     engine = engine,
-                    message = e.message?.takeIf { it.contains("cuota", ignoreCase = true) || it.contains("solicitudes", ignoreCase = true) }
-                        ?: "No se pudo conectar con ${engine.displayName}. Verifica tu conexión o cambia de traductor."
+                    message = e.message?.takeIf {
+                        it.contains("cuota", ignoreCase = true) ||
+                            it.contains("solicitudes", ignoreCase = true) ||
+                            it.contains("saldo", ignoreCase = true) ||
+                            it.contains("límite", ignoreCase = true)
+                    } ?: "No se pudo conectar con ${engine.displayName}. Verifica tu conexión o cambia de traductor."
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Lyrics translation failed (${engine.name})", e)

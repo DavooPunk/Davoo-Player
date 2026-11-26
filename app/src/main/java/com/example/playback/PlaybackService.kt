@@ -144,6 +144,7 @@ class PlaybackService : MediaLibraryService() {
     private var lastCrossfadeSourceKey: String? = null
     private var gapPauseJob: Job? = null
     private var isInTrackGapPause: Boolean = false
+    private var pauseFadeJob: Job? = null
     private var persistSessionJob: Job? = null
     private var lastPersistedAtMs: Long = 0L
     private var cachedTimelineCount: Int = -1
@@ -292,10 +293,27 @@ class PlaybackService : MediaLibraryService() {
         setMediaNotificationProvider(notificationProvider)
 
         val customButtons = buildCustomMediaButtons()
+        val sessionPlayer = object : androidx.media3.common.ForwardingPlayer(player) {
+            override fun play() {
+                performPlayWithOptionalFade(player)
+            }
+
+            override fun pause() {
+                performPauseWithOptionalFade(player)
+            }
+
+            override fun setPlayWhenReady(playWhenReady: Boolean) {
+                if (playWhenReady) {
+                    performPlayWithOptionalFade(player)
+                } else {
+                    performPauseWithOptionalFade(player)
+                }
+            }
+        }
 
         mediaLibrarySession = MediaLibrarySession.Builder(
             this,
-            player,
+            sessionPlayer,
             SonoraMediaLibraryCallback(customButtons)
         )
             .setSessionActivity(sessionActivityPendingIntent)
@@ -306,52 +324,128 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val result = super.onStartCommand(intent, flags, startId)
-        val player = mediaLibrarySession?.player ?: return result
+        val rawPlayer = mediaLibrarySession?.player
+        val sessionPlayer = rawPlayer ?: return result
         val action = intent?.action
         when (action) {
             ACTION_WIDGET_PLAY_PAUSE -> {
-                if (player.mediaItemCount == 0) {
+                if (sessionPlayer.mediaItemCount == 0) {
                     val saved = prefsStore.loadPlaybackSession()
                     if (saved != null && saved.items.isNotEmpty()) {
                         val items = saved.items.map { prefsStore.savedItemToMediaItem(it) }
                         val idx = saved.currentIndex.coerceIn(0, items.lastIndex)
-                        player.setMediaItems(items, idx, saved.positionMs)
-                        player.shuffleModeEnabled = saved.shuffleEnabled
-                        player.repeatMode = saved.repeatMode
-                        player.prepare()
-                        player.play()
+                        sessionPlayer.setMediaItems(items, idx, saved.positionMs)
+                        sessionPlayer.shuffleModeEnabled = saved.shuffleEnabled
+                        sessionPlayer.repeatMode = saved.repeatMode
+                        sessionPlayer.prepare()
+                        sessionPlayer.play()
                     }
-                } else if (player.isPlaying) {
-                    player.pause()
+                } else if (sessionPlayer.isPlaying) {
+                    sessionPlayer.pause()
                 } else {
-                    if (player.playbackState == Player.STATE_IDLE) player.prepare()
-                    player.play()
+                    if (sessionPlayer.playbackState == Player.STATE_IDLE) sessionPlayer.prepare()
+                    sessionPlayer.play()
                 }
             }
             ACTION_WIDGET_NEXT -> {
-                if (player.hasNextMediaItem()) {
-                    player.seekToNextMediaItem()
+                if (sessionPlayer.hasNextMediaItem()) {
+                    sessionPlayer.seekToNextMediaItem()
                 }
             }
             ACTION_WIDGET_PREV -> {
-                if (player.currentPosition > 3500L) {
-                    player.seekTo(0L)
-                } else if (player.hasPreviousMediaItem()) {
-                    player.seekToPreviousMediaItem()
+                if (sessionPlayer.currentPosition > 3500L) {
+                    sessionPlayer.seekTo(0L)
+                } else if (sessionPlayer.hasPreviousMediaItem()) {
+                    sessionPlayer.seekToPreviousMediaItem()
                 } else {
-                    player.seekTo(0L)
+                    sessionPlayer.seekTo(0L)
                 }
             }
         }
         // If a widget PendingIntent started this service via startForegroundService() while
         // the player has nothing to play, satisfy Android's foreground requirement briefly before stopping.
         if (action in setOf(ACTION_WIDGET_PLAY_PAUSE, ACTION_WIDGET_NEXT, ACTION_WIDGET_PREV) &&
-            player.mediaItemCount == 0 &&
-            !player.playWhenReady
+            sessionPlayer.mediaItemCount == 0 &&
+            !sessionPlayer.playWhenReady
         ) {
             postIdleForegroundAndStop()
         }
         return result
+    }
+
+    private fun performPlayWithOptionalFade(rawPlayer: ExoPlayer) {
+        pauseFadeJob?.cancel()
+        pauseFadeJob = null
+        if (rawPlayer.playbackState == Player.STATE_IDLE) {
+            runCatching { rawPlayer.prepare() }
+        }
+        if (!currentSettings.fadeOnPauseEnabled || isServiceDestroyed || activeFadeInActive) {
+            if (!activeFadeInActive) {
+                runCatching { rawPlayer.volume = currentReplayGainMultiplier }
+            }
+            runCatching { rawPlayer.play() }
+            return
+        }
+        val targetVol = currentReplayGainMultiplier
+        runCatching {
+            rawPlayer.volume = 0f
+            rawPlayer.play()
+        }
+        pauseFadeJob = serviceScope.launch {
+            val steps = 6
+            val stepDelay = 30L
+            for (step in 1..steps) {
+                delay(stepDelay)
+                if (isServiceDestroyed || !rawPlayer.playWhenReady) break
+                if (!activeFadeInActive) {
+                    val v = targetVol * (step.toFloat() / steps.toFloat())
+                    runCatching { rawPlayer.volume = v }
+                }
+            }
+            if (!isServiceDestroyed && !activeFadeInActive) {
+                runCatching { rawPlayer.volume = targetVol }
+            }
+        }
+    }
+
+    private fun performPauseWithOptionalFade(rawPlayer: ExoPlayer) {
+        pauseFadeJob?.cancel()
+        pauseFadeJob = null
+        if (!currentSettings.fadeOnPauseEnabled ||
+            isServiceDestroyed ||
+            isInTrackGapPause ||
+            !rawPlayer.playWhenReady ||
+            rawPlayer.playbackState == Player.STATE_IDLE ||
+            rawPlayer.playbackState == Player.STATE_ENDED
+        ) {
+            runCatching { rawPlayer.pause() }
+            return
+        }
+        val startVol = runCatching { rawPlayer.volume }.getOrDefault(currentReplayGainMultiplier)
+            .coerceIn(0f, 1.4f)
+        if (startVol <= 0.02f) {
+            runCatching {
+                rawPlayer.pause()
+                rawPlayer.volume = currentReplayGainMultiplier
+            }
+            return
+        }
+        pauseFadeJob = serviceScope.launch {
+            val steps = 6
+            val stepDelay = 30L
+            for (step in 1..steps) {
+                delay(stepDelay)
+                if (isServiceDestroyed) break
+                val frac = 1f - (step.toFloat() / steps.toFloat())
+                runCatching { rawPlayer.volume = startVol * frac }
+            }
+            if (!isServiceDestroyed) {
+                runCatching {
+                    rawPlayer.pause()
+                    rawPlayer.volume = currentReplayGainMultiplier
+                }
+            }
+        }
     }
 
     private fun postIdleForegroundAndStop() {
@@ -400,6 +494,8 @@ class PlaybackService : MediaLibraryService() {
         gapPauseJob?.cancel()
         gapPauseJob = null
         isInTrackGapPause = false
+        pauseFadeJob?.cancel()
+        pauseFadeJob = null
         persistSessionJob?.cancel()
         persistSessionJob = null
 
@@ -441,6 +537,15 @@ class PlaybackService : MediaLibraryService() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         com.example.ui.components.AudioArtImageLoaderProvider.trimMemory(level)
+        com.example.ui.components.RemoteArtImageLoaderProvider.trimMemory(level)
+        com.example.ui.theme.ArtworkColorExtractor.trimMemory(level)
+        com.example.data.repository.DeviceMusicScanner.trimMemory(level)
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN &&
+            !activeFadeInActive &&
+            crossfadeFadeJob?.isActive != true
+        ) {
+            releaseOutgoingPlayer()
+        }
     }
 
     override fun onDestroy() {
@@ -451,6 +556,7 @@ class PlaybackService : MediaLibraryService() {
         releaseOutgoingPlayer()
         gapPauseJob?.cancel()
         isInTrackGapPause = false
+        pauseFadeJob?.cancel()
         persistSessionJob?.cancel()
         mediaLibrarySession?.run {
             if (!sessionPersistedOnStop) {
@@ -475,10 +581,14 @@ class PlaybackService : MediaLibraryService() {
         val safeSpeed = settings.playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.5f, 2.0f) ?: 1.0f
         val safeBalance = settings.stereoBalance.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f
         val safePreamp = settings.preampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 12f) ?: 0f
+        val safeRgPreamp = settings.replayGainPreampDb.takeIf { it.isFinite() }?.coerceIn(-6f, 12f) ?: 3.0f
+        val safeRgUntaggedPreamp = settings.replayGainUntaggedPreampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 0f) ?: -4.0f
         val normalizedGains = com.example.model.EqPreset.normalizeToTenBands(settings.bandGainsMb)
         val normalized = settings.copy(
             bandGainsMb = normalizedGains,
             preampDb = safePreamp,
+            replayGainPreampDb = safeRgPreamp,
+            replayGainUntaggedPreampDb = safeRgUntaggedPreamp,
             playbackSpeed = safeSpeed,
             stereoBalance = safeBalance,
             bassBoostStrength = settings.bassBoostStrength.coerceIn(0, 1000),
@@ -511,10 +621,14 @@ class PlaybackService : MediaLibraryService() {
             runCatching { player.setPlaybackParameters(PlaybackParameters(safeSpeed)) }
             runCatching { outgoingPlayer?.setPlaybackParameters(PlaybackParameters(safeSpeed)) }
         }
+        val rgChanged = forceAll ||
+            previous.replayGainEnabled != normalized.replayGainEnabled ||
+            previous.replayGainPreampDb != normalized.replayGainPreampDb ||
+            previous.replayGainUntaggedPreampDb != normalized.replayGainUntaggedPreampDb
         val dspChanged = forceAll ||
             previous.bassBoostStrength != normalized.bassBoostStrength ||
             previous.virtualizerStrength != normalized.virtualizerStrength ||
-            previous.replayGainEnabled != normalized.replayGainEnabled
+            rgChanged
         if (dspChanged) {
             if (player is ExoPlayer && player.audioSessionId > 0) {
                 effectsController.attachToSession(player.audioSessionId, normalized)
@@ -530,7 +644,7 @@ class PlaybackService : MediaLibraryService() {
                 stopCrossfadeFadeAndOutgoing(player, releaseOutgoing = true)
             }
         }
-        if (forceAll || previous.replayGainEnabled != normalized.replayGainEnabled) {
+        if (rgChanged) {
             refreshReplayGainAndVolume(player, player.currentMediaItem)
         }
         if ((normalized.gaplessEnabled || normalized.crossfadeSeconds > 0) && isInTrackGapPause) {
@@ -578,6 +692,21 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    private fun applyResolvedReplayGain(player: Player, trackDb: Float?) {
+        val gainPair = computeReplayGainSplit(trackDb, currentSettings)
+        currentReplayGainMultiplier = gainPair.first
+        if (!activeFadeInActive) {
+            runCatching { player.volume = gainPair.first }
+        }
+        effectsController.setTrackHasReplayGainTag(trackDb != null)
+        effectsController.setReplayGainBoostDb(gainPair.second)
+        if (player is ExoPlayer && player.audioSessionId > 0) {
+            effectsController.attachToSession(player.audioSessionId, currentSettings)
+        } else {
+            effectsController.applySettings(currentSettings)
+        }
+    }
+
     private fun refreshReplayGainAndVolume(player: Player, mediaItem: MediaItem?) {
         if (isServiceDestroyed) return
         if (!currentSettings.replayGainEnabled || mediaItem == null) {
@@ -586,24 +715,21 @@ class PlaybackService : MediaLibraryService() {
                 runCatching { player.volume = 1.0f }
             }
             effectsController.setTrackHasReplayGainTag(false)
+            effectsController.setReplayGainBoostDb(0f)
             effectsController.applySettings(currentSettings)
             return
         }
         val extraGain = mediaItem.mediaMetadata.extras?.getFloat(PlaybackController.EXTRA_REPLAY_GAIN_DB, Float.NaN)
         if (extraGain != null && !extraGain.isNaN()) {
-            currentReplayGainMultiplier = dbToLinear(extraGain)
-            if (!activeFadeInActive) {
-                runCatching { player.volume = currentReplayGainMultiplier }
-            }
-            effectsController.setTrackHasReplayGainTag(true)
-            effectsController.applySettings(currentSettings)
+            applyResolvedReplayGain(player, extraGain)
         } else {
             val uri = mediaItem.localConfiguration?.uri
             val targetMediaId = mediaItem.mediaId
             if (uri != null) {
                 serviceScope.launch(Dispatchers.IO) {
-                    val db = runCatching { AudioTagParsers.extractReplayGainDb(this@PlaybackService, uri) }.getOrNull()
-                    val mult = if (db != null) dbToLinear(db) else 1.0f
+                    val db = runCatching {
+                        AudioTagParsers.extractReplayGainDb(this@PlaybackService, uri)
+                    }.getOrNull() ?: prefsStore.loadComputedReplayGain(targetMediaId)
                     serviceScope.launch(Dispatchers.Main.immediate) {
                         if (isServiceDestroyed ||
                             !currentSettings.replayGainEnabled ||
@@ -611,31 +737,17 @@ class PlaybackService : MediaLibraryService() {
                         ) {
                             return@launch
                         }
-                        currentReplayGainMultiplier = mult
-                        if (!activeFadeInActive) {
-                            runCatching { player.volume = mult }
-                        }
-                        effectsController.setTrackHasReplayGainTag(db != null)
-                        if (player is ExoPlayer && player.audioSessionId > 0) {
-                            effectsController.attachToSession(player.audioSessionId, currentSettings)
-                        } else {
-                            effectsController.applySettings(currentSettings)
-                        }
+                        applyResolvedReplayGain(player, db)
                     }
                 }
             } else {
-                currentReplayGainMultiplier = 1.0f
-                if (!activeFadeInActive) {
-                    runCatching { player.volume = 1.0f }
-                }
-                effectsController.setTrackHasReplayGainTag(false)
-                effectsController.applySettings(currentSettings)
+                applyResolvedReplayGain(player, null)
             }
         }
     }
 
     private fun dbToLinear(db: Float): Float {
-        return 10.0.pow(db / 20.0).toFloat().coerceIn(0.25f, 1.4f)
+        return 10.0.pow(db / 20.0).toFloat().coerceIn(0.15f, 1.0f)
     }
 
     @androidx.annotation.VisibleForTesting
@@ -1444,33 +1556,59 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun audioSettingsFromBundle(args: Bundle): AudioSettings? {
-        if (!args.containsKey(ARG_EQ_ENABLED)) return null
-        val presetName = args.getString(ARG_EQ_PRESET)
-        val preset = com.example.model.EqPreset.entries.firstOrNull { it.name == presetName }
-            ?: com.example.model.EqPreset.FLAT
-        val gains = com.example.model.EqPreset.normalizeToTenBands(
-            args.getIntArray(ARG_BAND_GAINS_MB)?.toList().orEmpty()
-        )
-        return AudioSettings(
-            eqEnabled = args.getBoolean(ARG_EQ_ENABLED, false),
-            eqPreset = preset,
-            bandGainsMb = gains,
-            preampDb = args.getFloat(ARG_PREAMP_DB, 0f),
-            activeProfileId = args.getString(ARG_PROFILE_ID),
-            activeProfileName = args.getString(ARG_PROFILE_NAME),
-            bassBoostStrength = args.getInt(ARG_BASS_BOOST, 0),
-            virtualizerStrength = args.getInt(ARG_VIRTUALIZER, 0),
-            crossfadeSeconds = args.getInt(ARG_CROSSFADE, 0),
-            gaplessEnabled = args.getBoolean(ARG_GAPLESS, true),
-            replayGainEnabled = args.getBoolean(ARG_REPLAYGAIN, false),
-            playbackSpeed = args.getFloat(ARG_SPEED, 1.0f),
-            stereoBalance = args.getFloat(ARG_BALANCE, 0f),
-            dynamicArtworkColors = args.getBoolean(ARG_DYNAMIC_COLORS, true)
-        )
-    }
-
     companion object {
+        internal fun computeReplayGainSplit(
+            trackGainDb: Float?,
+            settings: AudioSettings
+        ): Pair<Float, Float> {
+            if (!settings.replayGainEnabled) return 1.0f to 0f
+            val effectiveDb = if (trackGainDb != null && trackGainDb.isFinite()) {
+                trackGainDb + settings.replayGainPreampDb.coerceIn(-6f, 12f)
+            } else {
+                settings.replayGainUntaggedPreampDb.coerceIn(-12f, 0f)
+            }
+            val attenuationLinear = if (effectiveDb < 0f) {
+                10.0.pow(effectiveDb / 20.0).toFloat().coerceIn(0.15f, 1.0f)
+            } else {
+                1.0f
+            }
+            val positiveBoostDb = if (effectiveDb > 0f) {
+                effectiveDb.coerceIn(0f, 12f)
+            } else {
+                0f
+            }
+            return attenuationLinear to positiveBoostDb
+        }
+
+        internal fun audioSettingsFromBundle(args: Bundle): AudioSettings? {
+            if (!args.containsKey(ARG_EQ_ENABLED)) return null
+            val presetName = args.getString(ARG_EQ_PRESET)
+            val preset = com.example.model.EqPreset.entries.firstOrNull { it.name == presetName }
+                ?: com.example.model.EqPreset.FLAT
+            val gains = com.example.model.EqPreset.normalizeToTenBands(
+                args.getIntArray(ARG_BAND_GAINS_MB)?.toList().orEmpty()
+            )
+            return AudioSettings(
+                eqEnabled = args.getBoolean(ARG_EQ_ENABLED, false),
+                eqPreset = preset,
+                bandGainsMb = gains,
+                preampDb = args.getFloat(ARG_PREAMP_DB, 0f),
+                activeProfileId = args.getString(ARG_PROFILE_ID),
+                activeProfileName = args.getString(ARG_PROFILE_NAME),
+                bassBoostStrength = args.getInt(ARG_BASS_BOOST, 0),
+                virtualizerStrength = args.getInt(ARG_VIRTUALIZER, 0),
+                crossfadeSeconds = args.getInt(ARG_CROSSFADE, 0),
+                gaplessEnabled = args.getBoolean(ARG_GAPLESS, true),
+                replayGainEnabled = args.getBoolean(ARG_REPLAYGAIN, false),
+                replayGainPreampDb = args.getFloat(ARG_REPLAYGAIN_PREAMP_DB, 3.0f),
+                replayGainUntaggedPreampDb = args.getFloat(ARG_REPLAYGAIN_UNTAGGED_PREAMP_DB, -4.0f),
+                playbackSpeed = args.getFloat(ARG_SPEED, 1.0f),
+                stereoBalance = args.getFloat(ARG_BALANCE, 0f),
+                dynamicArtworkColors = args.getBoolean(ARG_DYNAMIC_COLORS, true),
+                fadeOnPauseEnabled = args.getBoolean(ARG_FADE_ON_PAUSE, false)
+            )
+        }
+
         const val NOTIFICATION_CHANNEL_ID = "sonora_playback_channel"
         const val ACTION_SEEK_BACK_10 = "com.example.playback.ACTION_SEEK_BACK_10"
         const val ACTION_SEEK_FORWARD_10 = "com.example.playback.ACTION_SEEK_FORWARD_10"
@@ -1488,9 +1626,12 @@ class PlaybackService : MediaLibraryService() {
         const val ARG_CROSSFADE = "arg_crossfade"
         const val ARG_GAPLESS = "arg_gapless"
         const val ARG_REPLAYGAIN = "arg_replaygain"
+        const val ARG_REPLAYGAIN_PREAMP_DB = "arg_replaygain_preamp_db"
+        const val ARG_REPLAYGAIN_UNTAGGED_PREAMP_DB = "arg_replaygain_untagged_preamp_db"
         const val ARG_SPEED = "arg_speed"
         const val ARG_BALANCE = "arg_balance"
         const val ARG_DYNAMIC_COLORS = "arg_dynamic_colors"
+        const val ARG_FADE_ON_PAUSE = "arg_fade_on_pause"
         const val ARG_STOP_AFTER_CURRENT = "arg_stop_after_current"
 
         const val ACTION_WIDGET_PLAY_PAUSE = "com.example.widget.ACTION_PLAY_PAUSE"

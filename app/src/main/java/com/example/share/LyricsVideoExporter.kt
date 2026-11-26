@@ -1,5 +1,6 @@
 package com.example.share
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -8,6 +9,7 @@ import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -18,7 +20,9 @@ import android.opengl.EGLSurface
 import android.opengl.GLES20
 import android.opengl.GLUtils
 import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.view.Surface
 import androidx.core.content.FileProvider
 import com.example.data.repository.AudioTagParsers
@@ -114,6 +118,74 @@ object LyricsVideoExporter {
         }
     }
 
+    suspend fun saveClipToPublicStorage(
+        context: Context,
+        ready: ShareExportUiState.Ready
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resolver = context.contentResolver
+            val isVideo = ready.format == ShareOutputFormat.VIDEO_MP4
+            val folderLabel = if (isVideo) "Películas/Davoo Player" else "Imágenes/Davoo Player"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val relativePath = if (isVideo) {
+                    "${Environment.DIRECTORY_MOVIES}/Davoo Player"
+                } else {
+                    "${Environment.DIRECTORY_PICTURES}/Davoo Player"
+                }
+                val collectionUri = if (isVideo) {
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, ready.fileName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, ready.mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val destUri = resolver.insert(collectionUri, values)
+                    ?: error("No se pudo crear el archivo en la galería del sistema")
+                try {
+                    resolver.openInputStream(ready.uri)?.use { input ->
+                        resolver.openOutputStream(destUri)?.use { output ->
+                            input.copyTo(output)
+                        } ?: error("No se pudo abrir el flujo de escritura")
+                    } ?: error("El clip temporal ya no está disponible")
+
+                    val finalizeValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    resolver.update(destUri, finalizeValues, null, null)
+                } catch (err: Throwable) {
+                    runCatching { resolver.delete(destUri, null, null) }
+                    throw err
+                }
+                "$folderLabel/${ready.fileName}"
+            } else {
+                val baseDir = context.getExternalFilesDir(
+                    if (isVideo) Environment.DIRECTORY_MOVIES else Environment.DIRECTORY_PICTURES
+                ) ?: File(context.filesDir, if (isVideo) "Movies" else "Pictures")
+                val targetDir = File(baseDir, "Davoo Player").apply { mkdirs() }
+                val destFile = File(targetDir, ready.fileName)
+                resolver.openInputStream(ready.uri)?.use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        input.copyTo(output)
+                    }
+                } ?: error("El clip temporal ya no está disponible")
+                runCatching {
+                    MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(destFile.absolutePath),
+                        arrayOf(ready.mimeType),
+                        null
+                    )
+                }
+                "Davoo Player/${ready.fileName}"
+            }
+        }
+    }
+
     private suspend fun exportStaticPngInternal(
         context: Context,
         spec: LyricsShareClipSpec,
@@ -189,41 +261,29 @@ object LyricsVideoExporter {
         onProgress(0.05f, "Decodificando audio del fragmento…")
         currentCoroutineContext().ensureActive()
 
-        val audioSegment = withContext(Dispatchers.IO) {
-            extractAndNormalizeAudioSegment(
-                context = context,
-                audioUri = spec.track.contentUri,
-                startMs = spec.startMs,
-                endMs = spec.endMs
-            )
-        }
-        onProgress(0.32f, "Codificando audio AAC…")
-        currentCoroutineContext().ensureActive()
-
-        val (audioFormat, audioPackets) = encodePcmToAacPackets(audioSegment)
+        val (audioFormat, audioPackets) = extractAndEncodeAudio(
+            context = context,
+            audioUri = spec.track.contentUri,
+            startMs = spec.startMs,
+            endMs = spec.endMs,
+            onProgress = onProgress
+        )
 
         onProgress(0.45f, "Preparando lienzo y codificador H.264…")
         currentCoroutineContext().ensureActive()
 
+        val requestedResolution = spec.videoResolution
         val artwork = withContext(Dispatchers.IO) {
-            LyricsShareCardRenderer.loadArtworkBitmap(context, spec.track, maxSizePx = 720)
-        }
-        var blurred: Bitmap? = null
-        if (spec.style == ShareCardStyle.BLURRED_ARTWORK && artwork != null) {
-            blurred = LyricsShareCardRenderer.createBlurredBackgroundBitmap(
-                source = artwork,
-                targetWidth = LyricsShareCardRenderer.VIDEO_WIDTH,
-                targetHeight = LyricsShareCardRenderer.VIDEO_HEIGHT
+            LyricsShareCardRenderer.loadArtworkBitmap(
+                context = context,
+                track = spec.track,
+                maxSizePx = if (requestedResolution.width >= 1080) 960 else 720
             )
         }
 
-        val frameBitmap = Bitmap.createBitmap(
-            LyricsShareCardRenderer.VIDEO_WIDTH,
-            LyricsShareCardRenderer.VIDEO_HEIGHT,
-            Bitmap.Config.ARGB_8888
-        )
-        val frameCanvas = Canvas(frameBitmap)
-
+        var activeResolution = requestedResolution
+        var blurred: Bitmap? = null
+        var frameBitmap: Bitmap? = null
         var videoEncoder: MediaCodec? = null
         var inputSurface: Surface? = null
         var eglRenderer: EglSurfaceBitmapRenderer? = null
@@ -231,28 +291,64 @@ object LyricsVideoExporter {
         var muxerStarted = false
 
         try {
-            val videoFormat = MediaFormat.createVideoFormat(
-                VIDEO_MIME,
-                LyricsShareCardRenderer.VIDEO_WIDTH,
-                LyricsShareCardRenderer.VIDEO_HEIGHT
-            ).apply {
-                setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
-                )
-                setInteger(MediaFormat.KEY_BIT_RATE, VIDEO_BITRATE)
-                setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FPS)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            fun createConfiguredEncoder(res: ShareVideoResolution): MediaCodec {
+                val fmt = MediaFormat.createVideoFormat(
+                    VIDEO_MIME,
+                    res.width,
+                    res.height
+                ).apply {
+                    setInteger(
+                        MediaFormat.KEY_COLOR_FORMAT,
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    )
+                    setInteger(MediaFormat.KEY_BIT_RATE, res.bitrateBps)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, VIDEO_FPS)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                }
+                val codec = MediaCodec.createEncoderByType(VIDEO_MIME)
+                return try {
+                    codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    codec
+                } catch (err: Throwable) {
+                    runCatching { codec.release() }
+                    throw err
+                }
             }
 
-            videoEncoder = MediaCodec.createEncoderByType(VIDEO_MIME).apply {
-                configure(videoFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            videoEncoder = try {
+                createConfiguredEncoder(requestedResolution)
+            } catch (err: Throwable) {
+                if (requestedResolution != ShareVideoResolution.HD_720P) {
+                    activeResolution = ShareVideoResolution.HD_720P
+                    createConfiguredEncoder(ShareVideoResolution.HD_720P)
+                } else {
+                    throw err
+                }
             }
+
+            val targetWidth = activeResolution.width
+            val targetHeight = activeResolution.height
+
+            if (spec.style == ShareCardStyle.BLURRED_ARTWORK && artwork != null) {
+                blurred = LyricsShareCardRenderer.createBlurredBackgroundBitmap(
+                    source = artwork,
+                    targetWidth = targetWidth,
+                    targetHeight = targetHeight
+                )
+            }
+
+            frameBitmap = Bitmap.createBitmap(
+                targetWidth,
+                targetHeight,
+                Bitmap.Config.ARGB_8888
+            )
+            val frameCanvas = Canvas(frameBitmap)
+
             inputSurface = videoEncoder.createInputSurface()
             eglRenderer = EglSurfaceBitmapRenderer(
                 surface = inputSurface,
-                width = LyricsShareCardRenderer.VIDEO_WIDTH,
-                height = LyricsShareCardRenderer.VIDEO_HEIGHT
+                width = targetWidth,
+                height = targetHeight
             )
             videoEncoder.start()
 
@@ -346,8 +442,8 @@ object LyricsVideoExporter {
 
                 LyricsShareCardRenderer.drawShareCardFrame(
                     canvas = frameCanvas,
-                    width = LyricsShareCardRenderer.VIDEO_WIDTH,
-                    height = LyricsShareCardRenderer.VIDEO_HEIGHT,
+                    width = targetWidth,
+                    height = targetHeight,
                     spec = spec,
                     artworkBitmap = artwork,
                     blurredBgBitmap = blurred,
@@ -361,7 +457,10 @@ object LyricsVideoExporter {
 
                 if (frameIdx % 4 == 0 || frameIdx == totalFrames - 1) {
                     val frac = 0.45f + 0.50f * ((frameIdx + 1).toFloat() / totalFrames.toFloat())
-                    onProgress(frac.coerceIn(0.45f, 0.96f), "Renderizando video (${frameIdx + 1}/$totalFrames)…")
+                    onProgress(
+                        frac.coerceIn(0.45f, 0.96f),
+                        "Renderizando ${activeResolution.shortLabel} (${frameIdx + 1}/$totalFrames)…"
+                    )
                 }
             }
 
@@ -382,10 +481,30 @@ object LyricsVideoExporter {
                 runCatching { muxer?.stop() }
             }
             runCatching { muxer?.release() }
-            if (!frameBitmap.isRecycled) frameBitmap.recycle()
+            if (frameBitmap != null && !frameBitmap.isRecycled) frameBitmap.recycle()
             if (blurred != null && !blurred.isRecycled) blurred.recycle()
             if (artwork != null && !artwork.isRecycled) artwork.recycle()
         }
+    }
+
+    private suspend fun extractAndEncodeAudio(
+        context: Context,
+        audioUri: String,
+        startMs: Long,
+        endMs: Long,
+        onProgress: (Float, String) -> Unit
+    ): Pair<MediaFormat, List<EncodedAudioPacket>> {
+        val audioSegment = withContext(Dispatchers.IO) {
+            extractAndNormalizeAudioSegment(
+                context = context,
+                audioUri = audioUri,
+                startMs = startMs,
+                endMs = endMs
+            )
+        }
+        onProgress(0.32f, "Codificando audio AAC…")
+        currentCoroutineContext().ensureActive()
+        return encodePcmToAacPackets(audioSegment)
     }
 
     private suspend fun extractAndNormalizeAudioSegment(
@@ -627,11 +746,10 @@ object LyricsVideoExporter {
                 start()
             }
 
-            val pcmBytes = ByteArray(segment.pcmShorts.size * 2)
-            ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(segment.pcmShorts)
-
+            val totalSamples = segment.pcmShorts.size
             val bytesPerFrame = segment.channelCount * 2
-            var byteOffset = 0
+            val scratchBytes = ByteArray(16_384)
+            var sampleOffset = 0
             var inputDone = false
             var outputDone = false
             val bufferInfo = MediaCodec.BufferInfo()
@@ -646,8 +764,8 @@ object LyricsVideoExporter {
                         val inBuf = encoder.getInputBuffer(inIdx)
                         if (inBuf != null) {
                             inBuf.clear()
-                            if (byteOffset >= pcmBytes.size) {
-                                val eosPtsUs = ((byteOffset / bytesPerFrame).toLong() * 1_000_000L) /
+                            if (sampleOffset >= totalSamples) {
+                                val eosPtsUs = ((sampleOffset / segment.channelCount).toLong() * 1_000_000L) /
                                     segment.sampleRateHz.toLong()
                                 encoder.queueInputBuffer(
                                     inIdx,
@@ -658,14 +776,24 @@ object LyricsVideoExporter {
                                 )
                                 inputDone = true
                             } else {
-                                val maxWrite = min(inBuf.remaining(), pcmBytes.size - byteOffset)
-                                val alignedWrite = (maxWrite / bytesPerFrame) * bytesPerFrame
-                                val actualWrite = if (alignedWrite > 0) alignedWrite else maxWrite
-                                val ptsUs = ((byteOffset / bytesPerFrame).toLong() * 1_000_000L) /
+                                val maxSamplesByBuf = (inBuf.remaining() / bytesPerFrame) * segment.channelCount
+                                val maxSamplesByScratch = (scratchBytes.size / bytesPerFrame) * segment.channelCount
+                                val samplesToWrite = minOf(
+                                    maxSamplesByBuf,
+                                    maxSamplesByScratch,
+                                    totalSamples - sampleOffset
+                                ).coerceAtLeast(1)
+                                val ptsUs = ((sampleOffset / segment.channelCount).toLong() * 1_000_000L) /
                                     segment.sampleRateHz.toLong()
-                                inBuf.put(pcmBytes, byteOffset, actualWrite)
-                                encoder.queueInputBuffer(inIdx, 0, actualWrite, ptsUs, 0)
-                                byteOffset += actualWrite
+                                var bytePos = 0
+                                for (i in 0 until samplesToWrite) {
+                                    val s = segment.pcmShorts[sampleOffset + i].toInt()
+                                    scratchBytes[bytePos++] = (s and 0xFF).toByte()
+                                    scratchBytes[bytePos++] = ((s shr 8) and 0xFF).toByte()
+                                }
+                                inBuf.put(scratchBytes, 0, bytePos)
+                                encoder.queueInputBuffer(inIdx, 0, bytePos, ptsUs, 0)
+                                sampleOffset += samplesToWrite
                             }
                         }
                     }
@@ -720,8 +848,8 @@ object LyricsVideoExporter {
         fun append(src: ShortArray, srcOffset: Int, length: Int) {
             if (length <= 0) return
             if (size + length > buffer.size) {
-                var newCap = buffer.size * 2
-                while (newCap < size + length) newCap *= 2
+                var newCap = buffer.size + (buffer.size shr 1)
+                if (newCap < size + length) newCap = size + length
                 buffer = buffer.copyOf(newCap)
             }
             System.arraycopy(src, srcOffset, buffer, size, length)

@@ -25,12 +25,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
@@ -101,7 +104,9 @@ fun LibraryScreen(
     onShowMetadata: (AudioTrack) -> Unit = {},
     onAddTracksToPlaylist: (List<AudioTrack>) -> Unit = {},
     onEnqueueTracks: (List<AudioTrack>) -> Unit = {},
-    onDeleteTracks: (List<AudioTrack>) -> Unit = {}
+    onDeleteTracks: (List<AudioTrack>) -> Unit = {},
+    onBatchAutoTagTracks: (List<AudioTrack>) -> Unit = {},
+    onBatchDownloadLyrics: (List<AudioTrack>) -> Unit = {}
 ) {
     var sortMenuExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -259,6 +264,60 @@ fun LibraryScreen(
                             tint = if (selectedTracks.isNotEmpty()) MaterialTheme.colorScheme.error
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
+                    }
+                    var batchMoreExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { batchMoreExpanded = true },
+                            enabled = selectedTracks.isNotEmpty(),
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("selection_more_actions_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "Más acciones en lote",
+                                tint = if (selectedTracks.isNotEmpty()) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = batchMoreExpanded,
+                            onDismissRequest = { batchMoreExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Auto-etiquetar con Deezer") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.AutoFixHigh, contentDescription = null)
+                                },
+                                onClick = {
+                                    batchMoreExpanded = false
+                                    val chosen = selectedTracks
+                                    if (chosen.isNotEmpty()) {
+                                        isSelectionMode = false
+                                        selectedTrackIds = emptySet()
+                                        onBatchAutoTagTracks(chosen)
+                                    }
+                                },
+                                modifier = Modifier.testTag("selection_batch_autotag_item")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Descargar letras (.lrc)") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Lyrics, contentDescription = null)
+                                },
+                                onClick = {
+                                    batchMoreExpanded = false
+                                    val chosen = selectedTracks
+                                    if (chosen.isNotEmpty()) {
+                                        isSelectionMode = false
+                                        selectedTrackIds = emptySet()
+                                        onBatchDownloadLyrics(chosen)
+                                    }
+                                },
+                                modifier = Modifier.testTag("selection_batch_lyrics_item")
+                            )
+                        }
                     }
                 }
             }

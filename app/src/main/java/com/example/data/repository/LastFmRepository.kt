@@ -25,6 +25,16 @@ object LastFmScrobblePolicy {
      * - En previews de Deezer (`deezer_preview:...`): 15 segundos (o 50% si dura menos).
      * - En pistas locales completas: 50% de la duración de la pista.
      */
+    fun computeThresholdMs(trackId: String, durationMs: Long): Long {
+        if (durationMs <= 0L) return Long.MAX_VALUE
+        val isPreview = trackId.startsWith(LastFmTrackItem.PREVIEW_TRACK_ID_PREFIX)
+        return if (isPreview) {
+            minOf(15_000L, (durationMs / 2L).coerceAtLeast(1_000L))
+        } else {
+            (durationMs / 2L).coerceAtLeast(1_000L)
+        }
+    }
+
     fun shouldScrobble(
         trackId: String,
         positionMs: Long,
@@ -32,13 +42,7 @@ object LastFmScrobblePolicy {
         alreadyScrobbled: Boolean
     ): Boolean {
         if (alreadyScrobbled || durationMs <= 0L || positionMs <= 0L) return false
-        val isPreview = trackId.startsWith(LastFmTrackItem.PREVIEW_TRACK_ID_PREFIX)
-        val thresholdMs = if (isPreview) {
-            minOf(15_000L, (durationMs / 2L).coerceAtLeast(1_000L))
-        } else {
-            (durationMs / 2L).coerceAtLeast(1_000L)
-        }
-        return positionMs >= thresholdMs
+        return positionMs >= computeThresholdMs(trackId, durationMs)
     }
 }
 

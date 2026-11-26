@@ -2,8 +2,6 @@ package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -11,8 +9,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -25,13 +26,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,13 +42,16 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.BluetoothAudio
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -56,6 +60,10 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.Speaker
+import androidx.compose.material.icons.rounded.Usb
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,12 +89,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -94,9 +100,12 @@ import androidx.media3.common.Player
 import com.example.model.AudioFormat
 import com.example.model.AudioSettings
 import com.example.model.AudioTrack
+import com.example.model.LyricsData
 import com.example.playback.PlaybackPositionState
 import com.example.playback.PlaybackUiState
+import com.example.playback.rememberAudioOutputDeviceInfo
 import com.example.ui.components.AudioAlbumArtThumbnail
+import com.example.ui.components.NowPlayingTab
 import com.example.ui.components.formatDuration
 import com.example.ui.components.formatFileSize
 import com.example.ui.theme.ArtworkColorExtractor
@@ -130,9 +139,16 @@ fun NowPlayingScreen(
     scrobbleStatusNotice: String? = null,
     onOpenAlbum: ((String) -> Unit)? = null,
     onOpenArtist: ((String) -> Unit)? = null,
-    livePositionFlow: StateFlow<PlaybackPositionState>? = null
+    livePositionFlow: StateFlow<PlaybackPositionState>? = null,
+    sleepTimerRemainingFlow: StateFlow<Long?>? = null,
+    stopAfterCurrentFlow: StateFlow<Boolean>? = null,
+    currentTrackLyrics: LyricsData? = null,
+    onQuickTranslateLyrics: (AudioTrack) -> Unit = { onShowLyrics(it) },
+    onShareLyricsSnippet: ((AudioTrack) -> Unit)? = null,
+    onOpenYtMusicTab: ((NowPlayingTab) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val outputDevice = rememberAudioOutputDeviceInfo()
     val track = playbackState.currentTrack
     val isLossless = track?.format == AudioFormat.FLAC || track?.format == AudioFormat.WAV
     val baseAccent = if (isLossless) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
@@ -159,6 +175,7 @@ fun NowPlayingScreen(
 
     var dragOffsetX by remember(track?.id) { mutableFloatStateOf(0f) }
     val animatedDragX by animateFloatAsState(targetValue = dragOffsetX, label = "artwork_swipe")
+    var showMoreMenu by remember { mutableStateOf(false) }
 
     Box(
         modifier = modifier
@@ -166,7 +183,7 @@ fun NowPlayingScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        accentColor.copy(alpha = 0.22f),
+                        accentColor.copy(alpha = 0.24f),
                         MaterialTheme.colorScheme.background,
                         MaterialTheme.colorScheme.background
                     )
@@ -198,24 +215,44 @@ fun NowPlayingScreen(
         ) {
             val availWidth = maxWidth
             val availHeight = maxHeight
-            val isCompactHeight = availHeight < 650.dp
+            val isTinyHeight = availHeight < 520.dp
+            val isUltraCompact = availHeight < 580.dp
+            val isCompactHeight = availHeight < 660.dp
+            val horizontalPad = if (availWidth < 360.dp) 16.dp else 18.dp
             val maxContainerWidth = minOf(availWidth, 560.dp)
-            val maxArtworkByWidth = (maxContainerWidth - 40.dp) * 0.78f
-            val fixedChromeReserve = if (!scrobbleStatusNotice.isNullOrBlank()) 392.dp else 366.dp
-            val maxArtworkByHeight = (availHeight - fixedChromeReserve).coerceAtLeast(140.dp)
-            val artworkSize = minOf(maxArtworkByWidth, maxArtworkByHeight).coerceIn(140.dp, 288.dp)
-            val extraVerticalSpace = (availHeight - artworkSize - fixedChromeReserve).coerceAtLeast(0.dp)
-            val sectionGap = (if (isCompactHeight) 8.dp else 10.dp) + (extraVerticalSpace / 6f).coerceIn(0.dp, 12.dp)
+            val maxArtworkByWidth = (maxContainerWidth - (horizontalPad * 2)).coerceAtLeast(120.dp)
+
+            val scrobbleReserve = if (!scrobbleStatusNotice.isNullOrBlank()) 24.dp else 0.dp
+            val fixedChromeReserve = when {
+                isTinyHeight -> 372.dp + scrobbleReserve
+                isUltraCompact -> 378.dp + scrobbleReserve
+                else -> 386.dp + scrobbleReserve
+            }
+            val minArtwork = when {
+                isTinyHeight -> 56.dp
+                isUltraCompact -> 112.dp
+                else -> 176.dp
+            }
+            val maxArtworkByHeight = (availHeight - fixedChromeReserve).coerceAtLeast(minArtwork)
+            val artworkSize = minOf(maxArtworkByWidth, maxArtworkByHeight).coerceIn(minArtwork, 420.dp)
+            val sectionGap = when {
+                isTinyHeight -> 2.dp
+                isUltraCompact -> 4.dp
+                isCompactHeight -> 6.dp
+                else -> 10.dp
+            }
 
             Column(
                 modifier = Modifier
                     .widthIn(max = 560.dp)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp, vertical = if (isCompactHeight) 6.dp else 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .heightIn(min = availHeight)
+                    .padding(horizontal = horizontalPad, vertical = if (isUltraCompact) 2.dp else 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Top Bar
+                // 1. Top Header Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -234,7 +271,12 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
                         Text(
                             text = "REPRODUCIENDO DESDE",
                             style = MaterialTheme.typography.labelSmall,
@@ -245,211 +287,234 @@ fun NowPlayingScreen(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            softWrap = false,
+                            modifier = Modifier.basicMarquee(
+                                iterations = Int.MAX_VALUE,
+                                repeatDelayMillis = 1500,
+                                velocity = 30.dp
+                            )
                         )
                     }
 
-                    IconButton(
-                        onClick = onOpenQueue,
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .testTag("now_playing_queue_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                            contentDescription = "Ver cola de reproducción"
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(sectionGap))
-
-                // Hero Artwork with responsive sizing & horizontal swipe-to-skip gesture
-                Box(
-                    modifier = Modifier
-                        .size(artworkSize)
-                        .graphicsLayer {
-                            translationX = animatedDragX * 0.45f
-                            rotationZ = (animatedDragX / 45f).coerceIn(-6f, 6f)
-                        }
-                        .pointerInput(track.id) {
-                            var totalDrag = 0f
-                            detectHorizontalDragGestures(
-                                onDragStart = { totalDrag = 0f },
-                                onHorizontalDrag = { _, dragAmount ->
-                                    totalDrag += dragAmount
-                                    dragOffsetX = totalDrag.coerceIn(-180f, 180f)
-                                },
-                                onDragEnd = {
-                                    if (totalDrag < -110f) {
-                                        onSkipNext()
-                                    } else if (totalDrag > 110f) {
-                                        onSkipPrevious()
-                                    }
-                                    dragOffsetX = 0f
-                                },
-                                onDragCancel = { dragOffsetX = 0f }
+                    Box {
+                        IconButton(
+                            onClick = { showMoreMenu = true },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("now_playing_more_menu_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "Más opciones de reproducción"
                             )
                         }
-                        .shadow(
-                            elevation = if (isCompactHeight) 16.dp else 22.dp,
-                            shape = RoundedCornerShape(24.dp),
-                            ambientColor = accentColor,
-                            spotColor = accentColor
-                        )
-                        .testTag("now_playing_artwork")
-                ) {
-                    AudioAlbumArtThumbnail(
-                        audioUri = track.contentUri,
-                        albumArtUri = track.albumArtUri,
-                        contentDescription = track.album,
-                        cornerRadius = 24.dp,
-                        thumbnailSizePx = 512,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
 
-                Spacer(modifier = Modifier.height(sectionGap))
-
-                // Live Audio Visualizer + Technical Format Badge
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    LiveSpectrumVisualizer(
-                        isPlaying = playbackState.isPlaying,
-                        accentColor = accentColor
-                    )
-                    val techLabel = playbackState.techSpecs?.formatBadge(track.format) ?: track.format.label
-                    val sizeText = formatFileSize(track.sizeBytes)
-                    val fullBadge = if (sizeText.isNotEmpty()) "$techLabel · $sizeText" else techLabel
-                    Surface(
-                        shape = RoundedCornerShape(100.dp),
-                        color = if (isLossless) {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.primaryContainer
-                        },
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
-                        modifier = Modifier.testTag("now_playing_tech_badge")
-                    ) {
-                        Text(
-                            text = fullBadge,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (isLossless) {
-                                MaterialTheme.colorScheme.onSecondaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                        )
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false },
+                            modifier = Modifier.testTag("now_playing_more_dropdown")
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Cola de reproducción") },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onOpenQueue()
+                                },
+                                modifier = Modifier.testTag("now_playing_menu_queue")
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (audioSettings.eqEnabled) "Ecualizador (${audioSettings.eqPreset.label})"
+                                        else "Ecualizador y DSP"
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Equalizer, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onOpenEqualizer()
+                                },
+                                modifier = Modifier.testTag("now_playing_menu_eq")
+                            )
+                            NowPlayingTimerMenuItem(
+                                fallbackRemainingMs = sleepTimerRemainingMs,
+                                fallbackStopAfterCurrent = stopAfterCurrentTrack,
+                                sleepTimerRemainingFlow = sleepTimerRemainingFlow,
+                                stopAfterCurrentFlow = stopAfterCurrentFlow,
+                                onClick = {
+                                    showMoreMenu = false
+                                    onOpenSleepTimer()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Guardar en lista") },
+                                leadingIcon = {
+                                    Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onAddToPlaylist(track)
+                                },
+                                modifier = Modifier.testTag("now_playing_menu_add_playlist")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Editar etiquetas") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Edit, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onEditTags(track)
+                                },
+                                modifier = Modifier.testTag("now_playing_menu_edit_tags")
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Metadatos técnicos") },
+                                leadingIcon = {
+                                    Icon(Icons.Rounded.Info, contentDescription = null)
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onShowMetadata(track)
+                                },
+                                modifier = Modifier.testTag("now_playing_menu_metadata")
+                            )
+                        }
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = !scrobbleStatusNotice.isNullOrBlank(),
-                    enter = fadeIn(),
-                    exit = fadeOut()
+                // 2. Upper-Center: Large 1:1 Hero Artwork + Audiophile Badges + Live Lyric Line
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(if (isUltraCompact) 4.dp else 7.dp)
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(100.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)),
+                    Box(
                         modifier = Modifier
-                            .padding(top = 6.dp)
-                            .testTag("now_playing_scrobble_badge")
+                            .size(artworkSize)
+                            .graphicsLayer {
+                                translationX = animatedDragX * 0.45f
+                                rotationZ = (animatedDragX / 45f).coerceIn(-6f, 6f)
+                            }
+                            .pointerInput(track.id) {
+                                var totalDrag = 0f
+                                detectHorizontalDragGestures(
+                                    onDragStart = { totalDrag = 0f },
+                                    onHorizontalDrag = { _, dragAmount ->
+                                        totalDrag += dragAmount
+                                        dragOffsetX = totalDrag.coerceIn(-180f, 180f)
+                                    },
+                                    onDragEnd = {
+                                        if (totalDrag < -110f) {
+                                            onSkipNext()
+                                        } else if (totalDrag > 110f) {
+                                            onSkipPrevious()
+                                        }
+                                        dragOffsetX = 0f
+                                    },
+                                    onDragCancel = { dragOffsetX = 0f }
+                                )
+                            }
+                            .shadow(
+                                elevation = if (isCompactHeight) 14.dp else 20.dp,
+                                shape = RoundedCornerShape(12.dp),
+                                ambientColor = accentColor,
+                                spotColor = accentColor
+                            )
+                            .testTag("now_playing_artwork")
                     ) {
-                        Text(
-                            text = scrobbleStatusNotice.orEmpty(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        AudioAlbumArtThumbnail(
+                            audioUri = track.contentUri,
+                            albumArtUri = track.albumArtUri,
+                            contentDescription = track.album,
+                            cornerRadius = 12.dp,
+                            thumbnailSizePx = 720,
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
-                }
 
-                Spacer(modifier = Modifier.height(sectionGap))
-
-            // Track Metadata + Favorite Heart
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = track.title,
-                        style = if (isCompactHeight) MaterialTheme.typography.titleLarge else MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    val displayArtist = playbackState.metadata?.artist ?: track.artist
-                    val displayAlbum = playbackState.metadata?.album ?: track.album
-                    val displayYear = (playbackState.metadata?.year ?: track.year).takeIf { it > 0 }
-                    val displayGenre = (playbackState.metadata?.genre ?: track.genre).takeIf { it.isNotBlank() }
-
+                    // Compact Audiophile Badges + Active Output Device
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
                     ) {
+                        LiveSpectrumVisualizer(
+                            isPlaying = playbackState.isPlaying,
+                            accentColor = accentColor
+                        )
+                        val techLabel = playbackState.techSpecs?.formatBadge(track.format) ?: track.format.label
+                        val sizeText = formatFileSize(track.sizeBytes)
+                        val fullBadge = if (sizeText.isNotEmpty()) "$techLabel · $sizeText" else techLabel
                         Surface(
-                            onClick = { onOpenArtist?.invoke(displayArtist) },
-                            enabled = onOpenArtist != null && displayArtist.isNotBlank(),
                             shape = RoundedCornerShape(100.dp),
-                            color = accentColor.copy(alpha = 0.14f),
-                            border = BorderStroke(0.75.dp, accentColor.copy(alpha = 0.35f)),
-                            modifier = Modifier.testTag("now_playing_artist_link")
+                            color = if (isLossless) {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.primaryContainer
+                            },
+                            border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
+                            modifier = Modifier.testTag("now_playing_tech_badge")
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Person,
-                                    contentDescription = "Ir al artista",
-                                    tint = accentColor,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = displayArtist,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Text(
+                                text = fullBadge,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isLossless) {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
                         }
 
+                        val outputIcon = when {
+                            outputDevice.isUsbDac -> Icons.Rounded.Usb
+                            outputDevice.isBluetooth -> Icons.Rounded.BluetoothAudio
+                            outputDevice.isWired -> Icons.Rounded.Headphones
+                            else -> Icons.Rounded.Speaker
+                        }
                         Surface(
-                            onClick = { onOpenAlbum?.invoke(displayAlbum) },
-                            enabled = onOpenAlbum != null && displayAlbum.isNotBlank(),
                             shape = RoundedCornerShape(100.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
-                            modifier = Modifier.testTag("now_playing_album_link")
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+                            border = BorderStroke(
+                                0.75.dp,
+                                if (outputDevice.isUsbDac) {
+                                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                }
+                            ),
+                            modifier = Modifier.testTag("now_playing_output_badge")
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Album,
-                                    contentDescription = "Ir al álbum",
-                                    tint = accentColor,
-                                    modifier = Modifier.size(14.dp)
+                                    imageVector = outputIcon,
+                                    contentDescription = "Salida de audio activa",
+                                    tint = if (outputDevice.isUsbDac || outputDevice.isExternal) {
+                                        accentColor
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = displayAlbum,
-                                    style = MaterialTheme.typography.labelLarge,
+                                    text = outputDevice.shortBadgeLabel,
+                                    style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -458,206 +523,373 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    val extraMeta = buildList {
-                        if (displayYear != null) add(displayYear.toString())
-                        if (displayGenre != null) add(displayGenre)
-                    }.joinToString(" · ")
-                    if (extraMeta.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = extraMeta,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    AnimatedVisibility(
+                        visible = !scrobbleStatusNotice.isNullOrBlank(),
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(100.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)),
+                            modifier = Modifier.testTag("now_playing_scrobble_badge")
+                        ) {
+                            Text(
+                                text = scrobbleStatusNotice.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                            )
+                        }
                     }
                 }
-                IconButton(
-                    onClick = { onToggleFavorite(track) },
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("now_playing_favorite_button")
+
+                // 3. Lower-Center: Track Info, Artist/Album, Favorite, Scrubber & Transport Controls
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(sectionGap * 0.65f)
                 ) {
-                    Icon(
-                        imageVector = if (track.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = if (track.isFavorite) "Quitar de favoritas" else "Marcar favorita",
-                        tint = if (track.isFavorite) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = track.title,
+                                style = when {
+                                    isTinyHeight -> MaterialTheme.typography.titleMedium
+                                    isCompactHeight -> MaterialTheme.typography.titleLarge
+                                    else -> MaterialTheme.typography.headlineSmall
+                                },
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .basicMarquee(
+                                        iterations = Int.MAX_VALUE,
+                                        repeatDelayMillis = 1500,
+                                        velocity = 30.dp
+                                    )
+                            )
+                            Spacer(modifier = Modifier.height(if (isTinyHeight) 2.dp else 4.dp))
+                            val displayArtist = playbackState.metadata?.artist ?: track.artist
+                            val displayAlbum = playbackState.metadata?.album ?: track.album
 
-            Spacer(modifier = Modifier.height(sectionGap * 0.75f))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    onClick = { onOpenArtist?.invoke(displayArtist) },
+                                    enabled = onOpenArtist != null && displayArtist.isNotBlank(),
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = accentColor.copy(alpha = 0.14f),
+                                    border = BorderStroke(0.75.dp, accentColor.copy(alpha = 0.35f)),
+                                    modifier = Modifier.testTag("now_playing_artist_link")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Person,
+                                            contentDescription = "Ir al artista",
+                                            tint = accentColor,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = displayArtist,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
 
-            // Isolated Scrubber so 350ms position ticks never recompose the artwork, gradient, or tools
-            NowPlayingScrubberSection(
-                fallbackPositionMs = playbackState.positionMs,
-                fallbackDurationMs = playbackState.durationMs,
-                livePositionFlow = livePositionFlow,
-                accentColor = accentColor,
-                onSeekTo = onSeekTo
-            )
-
-            Spacer(modifier = Modifier.height(sectionGap))
-
-            // Transport Controls (clean without 10s jump buttons)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = onToggleShuffle,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("now_playing_shuffle_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Shuffle,
-                        contentDescription = "Modo aleatorio",
-                        tint = if (playbackState.shuffleEnabled) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                IconButton(
-                    onClick = onSkipPrevious,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("now_playing_prev_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SkipPrevious,
-                        contentDescription = "Pista anterior",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-
-                FilledIconButton(
-                    onClick = onTogglePlayPause,
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = accentColor,
-                        contentColor = ThemePalette.bestContrastingTextColor(accentColor)
-                    ),
-                    modifier = Modifier
-                        .size(if (isCompactHeight) 62.dp else 66.dp)
-                        .testTag("now_playing_play_pause_button")
-                ) {
-                    Icon(
-                        imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "Pausar" else "Reproducir",
-                        modifier = Modifier.size(34.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onSkipNext,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("now_playing_next_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.SkipNext,
-                        contentDescription = "Siguiente pista",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onCycleRepeat,
-                    modifier = Modifier
-                        .minimumInteractiveComponentSize()
-                        .testTag("now_playing_repeat_button")
-                ) {
-                    val repeatIcon = if (playbackState.repeatMode == Player.REPEAT_MODE_ONE) {
-                        Icons.Rounded.RepeatOne
-                    } else {
-                        Icons.Rounded.Repeat
+                                Surface(
+                                    onClick = { onOpenAlbum?.invoke(displayAlbum) },
+                                    enabled = onOpenAlbum != null && displayAlbum.isNotBlank(),
+                                    shape = RoundedCornerShape(100.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+                                    modifier = Modifier.testTag("now_playing_album_link")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Album,
+                                            contentDescription = "Ir al álbum",
+                                            tint = accentColor,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = displayAlbum,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        IconButton(
+                            onClick = { onToggleFavorite(track) },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("now_playing_favorite_button")
+                        ) {
+                            Icon(
+                                imageVector = if (track.isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (track.isFavorite) "Quitar de favoritas" else "Marcar favorita",
+                                tint = if (track.isFavorite) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
-                    val repeatActive = playbackState.repeatMode != Player.REPEAT_MODE_OFF
-                    Icon(
-                        imageVector = repeatIcon,
-                        contentDescription = "Modo repetición",
-                        tint = if (repeatActive) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
 
-            Spacer(modifier = Modifier.height(sectionGap))
+                    NowPlayingScrubberSection(
+                        fallbackPositionMs = playbackState.positionMs,
+                        fallbackDurationMs = playbackState.durationMs,
+                        livePositionFlow = livePositionFlow,
+                        accentColor = accentColor,
+                        onSeekTo = onSeekTo
+                    )
 
-            // Secondary Audiophile Tools Strip
-            val timerLabel = when {
-                stopAfterCurrentTrack -> "Al terminar"
-                sleepTimerRemainingMs != null -> formatDuration(sleepTimerRemainingMs)
-                else -> "Temporizador"
-            }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onToggleShuffle,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("now_playing_shuffle_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Shuffle,
+                                contentDescription = "Modo aleatorio",
+                                tint = if (playbackState.shuffleEnabled) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.Rounded.Lyrics,
-                        label = "Letras",
-                        tint = accentColor,
-                        onClick = { onShowLyrics(track) },
-                        testTag = "now_playing_lyrics_button"
-                    )
-                }
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.Rounded.Equalizer,
-                        label = if (audioSettings.eqEnabled) "EQ (${audioSettings.eqPreset.label})" else "Ecualizador",
-                        tint = if (audioSettings.eqEnabled) MaterialTheme.colorScheme.secondary else accentColor,
-                        onClick = onOpenEqualizer,
-                        testTag = "now_playing_eq_button"
-                    )
-                }
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.Rounded.Bedtime,
-                        label = timerLabel,
-                        tint = if (sleepTimerRemainingMs != null || stopAfterCurrentTrack) MaterialTheme.colorScheme.primary else accentColor,
-                        onClick = onOpenSleepTimer,
-                        testTag = "now_playing_timer_button"
-                    )
-                }
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
-                        label = "Guardar en lista",
-                        tint = accentColor,
-                        onClick = { onAddToPlaylist(track) },
-                        testTag = "now_playing_add_to_playlist_button"
-                    )
-                }
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.Rounded.Edit,
-                        label = "Etiquetas",
-                        tint = accentColor,
-                        onClick = { onEditTags(track) },
-                        testTag = "now_playing_edit_tags_button"
-                    )
-                }
-                item {
-                    NowPlayingActionChip(
-                        icon = Icons.Rounded.Info,
-                        label = "Metadatos",
-                        tint = accentColor,
-                        onClick = { onShowMetadata(track) },
-                        testTag = "now_playing_metadata_button"
-                    )
-                }
-            }
+                        IconButton(
+                            onClick = onSkipPrevious,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("now_playing_prev_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipPrevious,
+                                contentDescription = "Pista anterior",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
 
-            Spacer(modifier = Modifier.height(8.dp))
+                        FilledIconButton(
+                            onClick = onTogglePlayPause,
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = accentColor,
+                                contentColor = ThemePalette.bestContrastingTextColor(accentColor)
+                            ),
+                            modifier = Modifier
+                                .size(if (isUltraCompact) 54.dp else if (isCompactHeight) 58.dp else 64.dp)
+                                .testTag("now_playing_play_pause_button")
+                        ) {
+                            Icon(
+                                imageVector = if (playbackState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (playbackState.isPlaying) "Pausar" else "Reproducir",
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onSkipNext,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("now_playing_next_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipNext,
+                                contentDescription = "Siguiente pista",
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = onCycleRepeat,
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("now_playing_repeat_button")
+                        ) {
+                            val repeatIcon = if (playbackState.repeatMode == Player.REPEAT_MODE_ONE) {
+                                Icons.Rounded.RepeatOne
+                            } else {
+                                Icons.Rounded.Repeat
+                            }
+                            val repeatActive = playbackState.repeatMode != Player.REPEAT_MODE_OFF
+                            Icon(
+                                imageVector = repeatIcon,
+                                contentDescription = "Modo repetición",
+                                tint = if (repeatActive) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // 4. Bottom-Docked YT Music-Inspired 3-Tab Bar (Cola, Letras, Info)
+                NowPlayingYtMusicBottomBar(
+                    accentColor = accentColor,
+                    compact = isTinyHeight,
+                    onSelectTab = { tab ->
+                        if (onOpenYtMusicTab != null) {
+                            onOpenYtMusicTab(tab)
+                        } else {
+                            when (tab) {
+                                NowPlayingTab.QUEUE -> onOpenQueue()
+                                NowPlayingTab.LYRICS -> onShowLyrics(track)
+                                NowPlayingTab.INFO -> onShowMetadata(track)
+                            }
+                        }
+                    }
+                )
             }
         }
     }
+}
+
+@Composable
+private fun NowPlayingYtMusicBottomBar(
+    accentColor: Color,
+    compact: Boolean = false,
+    onSelectTab: (NowPlayingTab) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.25f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = if (compact) 0.dp else 4.dp)
+            .testTag("now_playing_yt_bottom_bar")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = if (compact) 2.dp else 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NowPlayingYtTabButton(
+                tab = NowPlayingTab.QUEUE,
+                accentColor = accentColor,
+                compact = compact,
+                modifier = Modifier
+                    .weight(1f)
+                    .minimumInteractiveComponentSize()
+                    .testTag("now_playing_tab_bar_queue"),
+                onClick = { onSelectTab(NowPlayingTab.QUEUE) }
+            )
+            NowPlayingYtTabButton(
+                tab = NowPlayingTab.LYRICS,
+                accentColor = accentColor,
+                compact = compact,
+                modifier = Modifier
+                    .weight(1f)
+                    .minimumInteractiveComponentSize()
+                    .testTag("now_playing_lyrics_button"),
+                onClick = { onSelectTab(NowPlayingTab.LYRICS) }
+            )
+            NowPlayingYtTabButton(
+                tab = NowPlayingTab.INFO,
+                accentColor = accentColor,
+                compact = compact,
+                modifier = Modifier
+                    .weight(1f)
+                    .minimumInteractiveComponentSize()
+                    .testTag("now_playing_tab_bar_info"),
+                onClick = { onSelectTab(NowPlayingTab.INFO) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingYtTabButton(
+    tab: NowPlayingTab,
+    accentColor: Color,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = Color.Transparent,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = if (compact) 10.dp else 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = tab.icon,
+                contentDescription = tab.label,
+                tint = accentColor,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = tab.label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingTimerMenuItem(
+    fallbackRemainingMs: Long?,
+    fallbackStopAfterCurrent: Boolean,
+    sleepTimerRemainingFlow: StateFlow<Long?>?,
+    stopAfterCurrentFlow: StateFlow<Boolean>?,
+    onClick: () -> Unit
+) {
+    val liveRemainingMs = sleepTimerRemainingFlow?.collectAsStateWithLifecycle()?.value
+    val liveStopAfter = stopAfterCurrentFlow?.collectAsStateWithLifecycle()?.value
+    val remainingMs = if (sleepTimerRemainingFlow != null) liveRemainingMs else fallbackRemainingMs
+    val stopAfterCurrentTrack = if (stopAfterCurrentFlow != null) (liveStopAfter == true) else fallbackStopAfterCurrent
+    val timerLabel = when {
+        stopAfterCurrentTrack -> "Temporizador: Al terminar"
+        remainingMs != null -> "Temporizador: ${formatDuration(remainingMs)}"
+        else -> "Temporizador"
+    }
+    DropdownMenuItem(
+        text = { Text(timerLabel) },
+        leadingIcon = {
+            Icon(Icons.Rounded.Bedtime, contentDescription = null)
+        },
+        onClick = onClick,
+        modifier = Modifier.testTag("now_playing_menu_timer")
+    )
 }
 
 @Composable
@@ -699,7 +931,7 @@ private fun NowPlayingScrubberSection(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .height(34.dp)
+            .height(32.dp)
             .testTag("now_playing_slider")
     )
 
@@ -718,40 +950,6 @@ private fun NowPlayingScrubberSection(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun NowPlayingActionChip(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    onClick: () -> Unit,
-    testTag: String
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(100.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-        modifier = Modifier.testTag(testTag)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(7.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge
-            )
-        }
     }
 }
 
@@ -792,7 +990,7 @@ private fun LiveSpectrumVisualizer(
     }
 
     Row(
-        modifier = Modifier.height(16.dp),
+        modifier = Modifier.height(14.dp),
         horizontalArrangement = Arrangement.spacedBy(2.5.dp),
         verticalAlignment = Alignment.Bottom
     ) {
@@ -800,7 +998,7 @@ private fun LiveSpectrumVisualizer(
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .height(16.dp)
+                    .height(14.dp)
                     .graphicsLayer {
                         scaleY = level.coerceIn(0.15f, 1f)
                         transformOrigin = TransformOrigin(0.5f, 1f)

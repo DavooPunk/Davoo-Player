@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.Manifest
 import android.app.Application
+import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -11,6 +12,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
 import com.example.BuildConfig
+import com.example.ai.DeepSeekLyricsTranslator
+import com.example.ai.DeepSeekTestUiState
 import com.example.ai.LyricsTranslationCoordinator
 import com.example.ai.LyricsTranslationLanguage
 import com.example.ai.LyricsTranslationUiState
@@ -18,6 +21,7 @@ import com.example.ai.TranslationEngine
 import com.example.data.local.PlaybackPreferencesStore
 import com.example.data.local.SonoraBackupManager
 import com.example.data.local.SonoraDatabase
+import com.example.data.remote.MusicApiService
 import com.example.data.repository.AppUpdateChecker
 import com.example.data.repository.AppUpdateInfo
 import com.example.data.repository.AudioTagParsers
@@ -25,6 +29,7 @@ import com.example.data.repository.AudioTagWriter
 import com.example.data.repository.DeviceMusicScanner
 import com.example.data.repository.LastFmRepository
 import com.example.data.repository.LastFmTrackMatcher
+import com.example.data.repository.LibraryEnrichmentCoordinator
 import com.example.data.repository.MusicRepository
 import com.example.data.repository.OnlineLyricsCandidate
 import com.example.data.repository.PhysicalTagEditOutcome
@@ -39,6 +44,9 @@ import com.example.model.AudioFormat
 import com.example.model.AudioSettings
 import com.example.model.AudioTrack
 import com.example.model.AudioTrackMetadata
+import com.example.model.BatchAutoTagUiState
+import com.example.model.BatchLyricsUiState
+import com.example.model.DeezerTagSuggestion
 import com.example.model.DeezerTrackEnrichment
 import com.example.model.EqBandInfo
 import com.example.model.EqPreset
@@ -53,10 +61,12 @@ import com.example.model.LastFmUserInfo
 import com.example.model.LibraryFilter
 import com.example.model.LyricsData
 import com.example.model.PlaylistSummary
+import com.example.model.ReplayGainScanUiState
 import com.example.model.SdCardFolder
 import com.example.model.SortOrder
 import com.example.model.ThemePreset
 import com.example.playback.PlaybackController
+import com.example.playback.ReplayGainScanner
 import com.example.playback.PlaybackPositionState
 import com.example.playback.PlaybackUiState
 import com.example.share.LyricsShareClipSpec
@@ -70,6 +80,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -78,6 +89,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -166,11 +178,20 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     private val preferencesStore = PlaybackPreferencesStore(application)
     private val backupManager = SonoraBackupManager(application, database, preferencesStore)
     private val lastFmRepository = LastFmRepository(preferencesStore)
+    private val musicApiService = MusicApiService()
     private val playbackController = PlaybackController(
         context = application,
         repository = repository,
         scope = viewModelScope,
         lastFmRepository = lastFmRepository
+    )
+    private val enrichmentCoordinator = LibraryEnrichmentCoordinator(
+        context = application,
+        musicApiService = musicApiService,
+        repository = repository,
+        scope = viewModelScope,
+        onRefreshTracks = { updated -> playbackController.refreshTrackReferences(updated) },
+        onSnackbar = { msg -> snackbarFlow.value = msg }
     )
 
     private val rawSearchQueryFlow = MutableStateFlow("")
@@ -178,9 +199,15 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     private val globalSearchOpenFlow = MutableStateFlow(false)
     private val removingSdFoldersFlow = MutableStateFlow<Map<String, String>>(emptyMap())
     private val filterFlow = MutableStateFlow(LibraryFilter.ALL)
-    private val sortOrderFlow = MutableStateFlow(SortOrder.RECENT)
+    private val sortOrderFlow = MutableStateFlow(preferencesStore.loadLibrarySortOrder())
     private val permissionFlow = MutableStateFlow(checkAudioPermission())
     private val snackbarFlow = MutableStateFlow<String?>(null)
+
+    private val _replayGainScanState = MutableStateFlow(
+        ReplayGainScanUiState(cachedTracksCount = repository.getComputedReplayGainCount())
+    )
+    val replayGainScanState: StateFlow<ReplayGainScanUiState> = _replayGainScanState.asStateFlow()
+    private var replayGainScanJob: kotlinx.coroutines.Job? = null
 
     val playbackState: StateFlow<PlaybackUiState> = playbackController.uiState
     val playbackPosition: StateFlow<PlaybackPositionState> = playbackController.positionState
@@ -199,6 +226,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _preferredTranslationEngine = MutableStateFlow(preferencesStore.loadTranslationEngine())
     val preferredTranslationEngine: StateFlow<TranslationEngine> = _preferredTranslationEngine
+
+    private val _deepSeekApiKey = MutableStateFlow(preferencesStore.loadDeepSeekApiKey())
+    val deepSeekApiKey: StateFlow<String> = _deepSeekApiKey.asStateFlow()
+
+    private val _deepSeekConnectionTestState = MutableStateFlow<DeepSeekTestUiState>(DeepSeekTestUiState.Idle)
+    val deepSeekConnectionTestState: StateFlow<DeepSeekTestUiState> = _deepSeekConnectionTestState.asStateFlow()
+    private var deepSeekTestJob: Job? = null
 
     private val _customEqProfiles = MutableStateFlow(preferencesStore.loadCustomEqProfiles())
     val customEqProfiles: StateFlow<List<HeadphoneEqProfile>> = _customEqProfiles.asStateFlow()
@@ -226,8 +260,13 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     )
     val updateUiState: StateFlow<AppUpdateUiState> = _updateUiState.asStateFlow()
 
+    private val deepSeekTranslator = DeepSeekLyricsTranslator(
+        apiKeyProvider = { preferencesStore.loadDeepSeekApiKey() }
+    )
+
     private val lyricsTranslationCoordinator = LyricsTranslationCoordinator(
         scope = viewModelScope,
+        deepSeekTranslator = deepSeekTranslator,
         onPersistTranslation = { trackId, language, translated ->
             repository.saveLyricsTranslation(trackId, language, translated)
         }
@@ -236,7 +275,16 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _shareExportState = MutableStateFlow<ShareExportUiState>(ShareExportUiState.Idle)
     val shareExportState: StateFlow<ShareExportUiState> = _shareExportState.asStateFlow()
+    private val _isSavingShareClip = MutableStateFlow(false)
+    val isSavingShareClip: StateFlow<Boolean> = _isSavingShareClip.asStateFlow()
+    private val _savedShareClipNotice = MutableStateFlow<String?>(null)
+    val savedShareClipNotice: StateFlow<String?> = _savedShareClipNotice.asStateFlow()
     private var shareExportJob: Job? = null
+
+    val batchAutoTagState: StateFlow<BatchAutoTagUiState> = enrichmentCoordinator.batchAutoTagState
+    val pendingBatchWriteSender: StateFlow<IntentSender?> = enrichmentCoordinator.pendingBatchWriteSender
+    val batchLyricsState: StateFlow<BatchLyricsUiState> = enrichmentCoordinator.batchLyricsState
+    val downloadedLrcExportCount: StateFlow<Int> = enrichmentCoordinator.downloadedLrcExportCount
 
     private data class QueryParams(
         val search: String,
@@ -544,8 +592,26 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         startDebouncedGlobalSearchPipeline()
         playbackController.connect()
         observeLibraryReadyForSessionRestore()
+        observeTrackChangesToCancelTranslation()
         refreshLibrary()
-        maybeRunPeriodicUpdateCheck()
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(2_500L)
+            maybeRunPeriodicUpdateCheck()
+        }
+    }
+
+    private fun observeTrackChangesToCancelTranslation() {
+        viewModelScope.launch {
+            playbackState
+                .map { it.currentTrack?.id }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    if (lyricsTranslationCoordinator.state.value is LyricsTranslationUiState.Loading) {
+                        lyricsTranslationCoordinator.reset()
+                    }
+                }
+        }
     }
 
     private fun observeLibraryReadyForSessionRestore() {
@@ -625,6 +691,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         shareExportJob?.cancel()
+        deepSeekTestJob?.cancel()
         lyricsTranslationCoordinator.reset()
         playbackController.release()
         super.onCleared()
@@ -726,6 +793,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectSortOrder(order: SortOrder) {
         sortOrderFlow.value = order
+        preferencesStore.saveLibrarySortOrder(order)
     }
 
     fun consumeSnackbar() {
@@ -773,6 +841,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
     fun removeTracksFromPlaybackQueue(trackIds: Set<String>) = playbackController.removeTracksFromQueue(trackIds)
     fun toggleShuffle() = playbackController.toggleShuffle()
     fun cycleRepeatMode() = playbackController.cycleRepeatMode()
+    fun setUiForeground(inForeground: Boolean) = playbackController.setUiForeground(inForeground)
 
     // DSP, EQ, Appearance & Backup
     fun updateAudioSettings(newSettings: AudioSettings, immediate: Boolean = true) {
@@ -867,6 +936,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
                 backupManager.importFromUri(uri).onSuccess { restored ->
                     _appearancePreferences.value = restored.appearance
                     playbackController.updateAudioSettings(restored.audioSettings, immediate = true)
+                    sortOrderFlow.value = preferencesStore.loadLibrarySortOrder()
                     _customEqProfiles.value = restored.customEqProfiles
                     _preferredTranslationEngine.value = restored.preferredTranslationEngine
                     _updateUiState.update { cur ->
@@ -921,6 +991,50 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
             )
         }
         snackbarFlow.value = "Perfil personalizado eliminado"
+    }
+
+    fun importAutoEqProfileFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val appContext = getApplication<Application>()
+                    val rawName = runCatching {
+                        appContext.contentResolver.query(
+                            uri,
+                            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                            null,
+                            null,
+                            null
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) cursor.getString(0) else null
+                        }
+                    }.getOrNull() ?: uri.lastPathSegment
+                    val rawText = appContext.contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.bufferedReader(Charsets.UTF_8).readText()
+                    } ?: error("No se pudo leer el archivo seleccionado")
+                    com.example.model.AutoEqGraphicEqParser.parseGraphicEqTxt(rawText, rawName)
+                        ?: error("El archivo no tiene formato AutoEq GraphicEQ válido")
+                }
+            }
+            result.onSuccess { profile ->
+                _customEqProfiles.value = preferencesStore.saveCustomEqProfile(profile)
+                val current = audioSettings.value
+                updateAudioSettings(
+                    current.copy(
+                        eqEnabled = true,
+                        eqPreset = EqPreset.CUSTOM,
+                        preampDb = profile.preampDb,
+                        bandGainsMb = EqPreset.normalizeToTenBands(profile.bandGainsMb),
+                        activeProfileId = profile.id,
+                        activeProfileName = profile.fullName
+                    ),
+                    immediate = true
+                )
+                snackbarFlow.value = "Perfil AutoEq «${profile.model}» importado y activado"
+            }.onFailure { err ->
+                snackbarFlow.value = err.message ?: "No se pudo importar el archivo AutoEq"
+            }
+        }
     }
 
     fun startSleepTimer(minutes: Int?, afterCurrentTrack: Boolean) {
@@ -1067,6 +1181,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         return loaded
     }
 
+    suspend fun loadLyricsPreview(track: AudioTrack): LyricsData? = repository.loadLyrics(track)
+
     fun resetLyricsTranslation() {
         lyricsTranslationCoordinator.reset()
     }
@@ -1076,11 +1192,44 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         preferencesStore.saveTranslationEngine(engine)
     }
 
+    fun saveDeepSeekApiKey(apiKey: String) {
+        val trimmed = apiKey.trim()
+        preferencesStore.saveDeepSeekApiKey(trimmed)
+        _deepSeekApiKey.value = trimmed
+        _deepSeekConnectionTestState.value = DeepSeekTestUiState.Idle
+        snackbarFlow.value = if (trimmed.isNotEmpty()) {
+            "API Key de DeepSeek guardada en este dispositivo"
+        } else {
+            "API Key de DeepSeek eliminada"
+        }
+    }
+
+    fun testDeepSeekConnection(apiKeyDraft: String) {
+        val trimmed = apiKeyDraft.trim()
+        deepSeekTestJob?.cancel()
+        deepSeekTestJob = viewModelScope.launch {
+            _deepSeekConnectionTestState.value = DeepSeekTestUiState.Testing
+            val result = deepSeekTranslator.testConnection(trimmed)
+            result.onSuccess { msg ->
+                if (trimmed.isNotEmpty()) {
+                    preferencesStore.saveDeepSeekApiKey(trimmed)
+                    _deepSeekApiKey.value = trimmed
+                }
+                _deepSeekConnectionTestState.value = DeepSeekTestUiState.Success(msg)
+            }.onFailure { err ->
+                _deepSeekConnectionTestState.value = DeepSeekTestUiState.Error(
+                    err.message ?: "No se pudo verificar la conexión con DeepSeek."
+                )
+            }
+        }
+    }
+
     fun translateLyrics(
         track: AudioTrack,
         lyrics: LyricsData,
         targetLanguage: LyricsTranslationLanguage,
-        engine: TranslationEngine = _preferredTranslationEngine.value
+        engine: TranslationEngine = _preferredTranslationEngine.value,
+        forceRefresh: Boolean = true
     ) {
         if (engine != _preferredTranslationEngine.value) {
             setPreferredTranslationEngine(engine)
@@ -1091,7 +1240,8 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
             trackArtist = track.artist,
             lyrics = lyrics,
             targetLanguage = targetLanguage,
-            engine = engine
+            engine = engine,
+            forceRefresh = forceRefresh
         )
     }
 
@@ -1237,6 +1387,7 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startLyricsShareExport(spec: LyricsShareClipSpec) {
         shareExportJob?.cancel()
+        _savedShareClipNotice.value = null
         _shareExportState.value = ShareExportUiState.Preparing
         shareExportJob = viewModelScope.launch {
             try {
@@ -1262,14 +1413,37 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun saveShareClipToDevice(ready: ShareExportUiState.Ready) {
+        if (_isSavingShareClip.value) return
+        _isSavingShareClip.value = true
+        viewModelScope.launch {
+            try {
+                LyricsVideoExporter.saveClipToPublicStorage(getApplication(), ready)
+                    .onSuccess { savedLabel ->
+                        _savedShareClipNotice.value = "Guardado en $savedLabel"
+                        snackbarFlow.value = "Guardado en $savedLabel"
+                    }
+                    .onFailure { err ->
+                        snackbarFlow.value = err.message ?: "No se pudo guardar el clip en el dispositivo"
+                    }
+            } finally {
+                _isSavingShareClip.value = false
+            }
+        }
+    }
+
     fun cancelLyricsShareExport() {
         shareExportJob?.cancel()
         shareExportJob = null
+        _isSavingShareClip.value = false
+        _savedShareClipNotice.value = null
         LyricsVideoExporter.cleanupSharedClipsCache(getApplication())
         _shareExportState.value = ShareExportUiState.Idle
     }
 
     fun resetShareExportState() {
+        _isSavingShareClip.value = false
+        _savedShareClipNotice.value = null
         _shareExportState.value = ShareExportUiState.Idle
     }
 
@@ -1824,6 +1998,217 @@ class SonoraViewModel(application: Application) : AndroidViewModel(application) 
                 snackbarFlow.value = err.message ?: "No se pudo sincronizar favorito con Last.fm"
             }
         }
+    }
+
+    suspend fun searchDeezerTagSuggestions(
+        track: AudioTrack,
+        customQuery: String? = null
+    ): Result<List<DeezerTagSuggestion>> = enrichmentCoordinator.searchDeezerTagSuggestions(track, customQuery)
+
+    suspend fun resolveDeezerTagSuggestion(
+        suggestion: DeezerTagSuggestion
+    ): Pair<DeezerTagSuggestion, String?> = enrichmentCoordinator.resolveDeezerTagSuggestion(suggestion)
+
+    fun openBatchAutoTag(tracks: List<AudioTrack>, onlyMissingByDefault: Boolean) {
+        enrichmentCoordinator.openBatchAutoTag(tracks, onlyMissingByDefault)
+    }
+
+    fun setBatchAutoTagOnlyMissing(value: Boolean) {
+        enrichmentCoordinator.setBatchAutoTagOnlyMissing(value)
+    }
+
+    fun setBatchAutoTagOverwriteArtwork(value: Boolean) {
+        enrichmentCoordinator.setBatchAutoTagOverwriteArtwork(value)
+    }
+
+    fun startBatchAutoTag() {
+        enrichmentCoordinator.startBatchAutoTag()
+    }
+
+    fun resumeBatchAutoTagAfterPermission(granted: Boolean) {
+        enrichmentCoordinator.resumeBatchAutoTagAfterPermission(granted)
+    }
+
+    fun cancelBatchAutoTag() {
+        enrichmentCoordinator.cancelBatchAutoTag()
+    }
+
+    fun dismissBatchAutoTag() {
+        enrichmentCoordinator.dismissBatchAutoTag()
+    }
+
+    fun openBatchLyrics(tracks: List<AudioTrack>) {
+        enrichmentCoordinator.openBatchLyrics(tracks)
+    }
+
+    fun setBatchLyricsSyncedOnly(value: Boolean) {
+        enrichmentCoordinator.setBatchLyricsSyncedOnly(value)
+    }
+
+    fun setBatchLyricsOverwrite(value: Boolean) {
+        enrichmentCoordinator.setBatchLyricsOverwrite(value)
+    }
+
+    fun startBatchLyrics() {
+        enrichmentCoordinator.startBatchLyrics()
+    }
+
+    fun cancelBatchLyrics() {
+        enrichmentCoordinator.cancelBatchLyrics()
+    }
+
+    fun exportDownloadedLrcToTreeUri(treeUri: Uri) {
+        enrichmentCoordinator.exportDownloadedLrcToTreeUri(treeUri)
+    }
+
+    fun dismissBatchLyrics() {
+        enrichmentCoordinator.dismissBatchLyrics()
+    }
+
+    // On-demand ReplayGain / Loudness Scanner (from Opciones)
+    fun openReplayGainScanner() {
+        _replayGainScanState.update { cur ->
+            if (cur.isRunning) {
+                cur.copy(isVisible = true)
+            } else {
+                ReplayGainScanUiState(
+                    isVisible = true,
+                    onlyMissing = cur.onlyMissing,
+                    totalCount = uiState.value.allTracks.size,
+                    cachedTracksCount = repository.getComputedReplayGainCount()
+                )
+            }
+        }
+    }
+
+    fun setReplayGainScanOnlyMissing(onlyMissing: Boolean) {
+        _replayGainScanState.update { cur ->
+            if (cur.isRunning) cur else cur.copy(onlyMissing = onlyMissing)
+        }
+    }
+
+    fun startReplayGainScan() {
+        if (_replayGainScanState.value.isRunning) return
+        val tracks = uiState.value.allTracks.filter {
+            it.contentUri.isNotBlank() && !it.contentUri.startsWith("http", ignoreCase = true)
+        }
+        if (tracks.isEmpty()) {
+            snackbarFlow.value = "No hay canciones locales para analizar"
+            return
+        }
+        val onlyMissing = _replayGainScanState.value.onlyMissing
+        replayGainScanJob?.cancel()
+        _replayGainScanState.value = ReplayGainScanUiState(
+            isVisible = true,
+            isRunning = true,
+            completed = false,
+            onlyMissing = onlyMissing,
+            totalCount = tracks.size,
+            cachedTracksCount = repository.getComputedReplayGainCount()
+        )
+
+        replayGainScanJob = viewModelScope.launch(Dispatchers.Default) {
+            var analyzed = 0
+            var skipped = 0
+            var failed = 0
+            var processed = 0
+            val pendingBatch = LinkedHashMap<String, Float>()
+            val updatedForPlayback = mutableListOf<AudioTrack>()
+
+            try {
+                for (track in tracks) {
+                    ensureActive()
+                    _replayGainScanState.update {
+                        it.copy(
+                            processedCount = processed,
+                            currentTrackLabel = "${track.artist} — ${track.title}"
+                        )
+                    }
+
+                    if (onlyMissing && track.replayGainDb != null) {
+                        skipped++
+                    } else {
+                        val db = ReplayGainScanner.scanTrackReplayGainDb(getApplication(), track.contentUri)
+                        if (db != null) {
+                            pendingBatch[track.id] = db
+                            updatedForPlayback += track.copy(replayGainDb = db)
+                            analyzed++
+                        } else {
+                            failed++
+                        }
+                    }
+
+                    processed++
+                    if (pendingBatch.size >= 8) {
+                        repository.saveComputedReplayGainBatch(pendingBatch.toMap())
+                        pendingBatch.clear()
+                    }
+                    _replayGainScanState.update {
+                        it.copy(
+                            processedCount = processed,
+                            analyzedCount = analyzed,
+                            skippedCount = skipped,
+                            failedCount = failed,
+                            cachedTracksCount = repository.getComputedReplayGainCount()
+                        )
+                    }
+                }
+
+                if (pendingBatch.isNotEmpty()) {
+                    repository.saveComputedReplayGainBatch(pendingBatch.toMap())
+                    pendingBatch.clear()
+                }
+                if (updatedForPlayback.isNotEmpty()) {
+                    playbackController.refreshTrackReferences(updatedForPlayback)
+                }
+
+                _replayGainScanState.update {
+                    it.copy(
+                        isRunning = false,
+                        completed = true,
+                        processedCount = processed,
+                        analyzedCount = analyzed,
+                        skippedCount = skipped,
+                        failedCount = failed,
+                        cachedTracksCount = repository.getComputedReplayGainCount(),
+                        currentTrackLabel = ""
+                    )
+                }
+                snackbarFlow.value = if (analyzed > 0) {
+                    "ReplayGain calculado para $analyzed canciones"
+                } else {
+                    "Biblioteca verificada sin nuevos cálculos pendientes"
+                }
+            } catch (_: kotlinx.coroutines.CancellationException) {
+                if (pendingBatch.isNotEmpty()) {
+                    runCatching { repository.saveComputedReplayGainBatch(pendingBatch.toMap()) }
+                }
+                _replayGainScanState.update {
+                    it.copy(
+                        isRunning = false,
+                        completed = false,
+                        cachedTracksCount = repository.getComputedReplayGainCount(),
+                        currentTrackLabel = ""
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelReplayGainScan() {
+        replayGainScanJob?.cancel()
+        replayGainScanJob = null
+        _replayGainScanState.update {
+            it.copy(
+                isRunning = false,
+                currentTrackLabel = ""
+            )
+        }
+    }
+
+    fun dismissReplayGainScan() {
+        if (_replayGainScanState.value.isRunning) return
+        _replayGainScanState.update { it.copy(isVisible = false) }
     }
 
     private fun checkAudioPermission(): Boolean {

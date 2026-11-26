@@ -11,6 +11,7 @@ import com.example.model.AudioSettings
 import com.example.model.CustomThemeColors
 import com.example.model.EqPreset
 import com.example.model.HeadphoneEqProfile
+import com.example.model.SortOrder
 import com.example.model.ThemePreset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -45,9 +46,12 @@ data class BackupAudioSettingsDto(
     val crossfadeSeconds: Int = 0,
     val gaplessEnabled: Boolean = true,
     val replayGainEnabled: Boolean = false,
+    val replayGainPreampDb: Float = 3.0f,
+    val replayGainUntaggedPreampDb: Float = -4.0f,
     val playbackSpeed: Float = 1.0f,
     val stereoBalance: Float = 0f,
-    val dynamicArtworkColors: Boolean = true
+    val dynamicArtworkColors: Boolean = true,
+    val fadeOnPauseEnabled: Boolean = false
 )
 
 @Serializable
@@ -117,6 +121,7 @@ data class SonoraBackupPayload(
     val preferredTranslationEngine: String = TranslationEngine.GOOGLE.name,
     val autoUpdateCheckEnabled: Boolean = true,
     val githubRepoUrl: String = "",
+    val librarySortOrder: String = SortOrder.RECENT.name,
     val excludedFolders: List<String> = emptyList(),
     val trackStats: List<BackupTrackStatsDto> = emptyList(),
     val trackTagOverrides: List<BackupTagOverrideDto> = emptyList(),
@@ -157,6 +162,7 @@ class SonoraBackupManager(
         val translationEngine = prefsStore.loadTranslationEngine()
         val autoUpdates = prefsStore.isAutoUpdateCheckEnabled()
         val repoUrl = prefsStore.loadGithubRepoUrl()
+        val sortOrder = prefsStore.loadLibrarySortOrder()
 
         val excludedFolders = database.excludedFolderDao().getAllExcludedOnce().map { it.folderName }
         val trackStats = database.trackStatsDao().getAllStatsOnce().map {
@@ -231,9 +237,12 @@ class SonoraBackupManager(
                 crossfadeSeconds = audio.crossfadeSeconds,
                 gaplessEnabled = audio.gaplessEnabled,
                 replayGainEnabled = audio.replayGainEnabled,
+                replayGainPreampDb = audio.replayGainPreampDb,
+                replayGainUntaggedPreampDb = audio.replayGainUntaggedPreampDb,
                 playbackSpeed = audio.playbackSpeed,
                 stereoBalance = audio.stereoBalance,
-                dynamicArtworkColors = appearance.dynamicArtworkColors
+                dynamicArtworkColors = appearance.dynamicArtworkColors,
+                fadeOnPauseEnabled = audio.fadeOnPauseEnabled
             ),
             customEqProfiles = eqProfiles.map {
                 BackupCustomEqProfileDto(
@@ -246,6 +255,7 @@ class SonoraBackupManager(
             preferredTranslationEngine = translationEngine.name,
             autoUpdateCheckEnabled = autoUpdates,
             githubRepoUrl = repoUrl,
+            librarySortOrder = sortOrder.name,
             excludedFolders = excludedFolders,
             trackStats = trackStats,
             trackTagOverrides = tagOverrides,
@@ -315,9 +325,12 @@ class SonoraBackupManager(
             crossfadeSeconds = payload.audioSettings.crossfadeSeconds.coerceIn(0, 12),
             gaplessEnabled = payload.audioSettings.gaplessEnabled,
             replayGainEnabled = payload.audioSettings.replayGainEnabled,
+            replayGainPreampDb = payload.audioSettings.replayGainPreampDb.takeIf { it.isFinite() }?.coerceIn(-6f, 12f) ?: 3.0f,
+            replayGainUntaggedPreampDb = payload.audioSettings.replayGainUntaggedPreampDb.takeIf { it.isFinite() }?.coerceIn(-12f, 0f) ?: -4.0f,
             playbackSpeed = payload.audioSettings.playbackSpeed.takeIf { it.isFinite() }?.coerceIn(0.5f, 2.0f) ?: 1.0f,
             stereoBalance = payload.audioSettings.stereoBalance.takeIf { it.isFinite() }?.coerceIn(-1f, 1f) ?: 0f,
-            dynamicArtworkColors = restoredAppearance.dynamicArtworkColors
+            dynamicArtworkColors = restoredAppearance.dynamicArtworkColors,
+            fadeOnPauseEnabled = payload.audioSettings.fadeOnPauseEnabled
         )
 
         val restoredProfiles = payload.customEqProfiles.map { dto ->
@@ -335,6 +348,10 @@ class SonoraBackupManager(
         val engine = TranslationEngine.fromName(payload.preferredTranslationEngine)
         prefsStore.saveAppearancePreferences(restoredAppearance)
         prefsStore.saveAudioSettings(restoredAudio)
+        val restoredSortOrder = SortOrder.entries.firstOrNull { it.name == payload.librarySortOrder }
+        if (restoredSortOrder != null) {
+            prefsStore.saveLibrarySortOrder(restoredSortOrder)
+        }
         if (restoredProfiles.isNotEmpty()) {
             prefsStore.saveCustomEqProfiles(restoredProfiles)
         }

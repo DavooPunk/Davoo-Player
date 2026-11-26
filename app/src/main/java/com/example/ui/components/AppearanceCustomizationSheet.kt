@@ -373,7 +373,7 @@ fun AppearanceCustomizationSheet(
                         contentPadding = PaddingValues(vertical = 2.dp),
                         modifier = Modifier.testTag("theme_presets_row")
                     ) {
-                        items(ThemePreset.entries, key = { it.name }) { preset ->
+                        items(ThemePreset.entries, key = { it.name }, contentType = { "theme_preset" }) { preset ->
                             val isSelected = appearance.preset == preset
                             FilterChip(
                                 selected = isSelected,

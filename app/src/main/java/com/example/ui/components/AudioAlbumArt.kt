@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -219,10 +220,12 @@ object AudioArtImageLoaderProvider {
     fun get(context: Context): ImageLoader {
         return instance ?: synchronized(this) {
             val appContext = context.applicationContext
+            val isLowRam = (appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.isLowRamDevice == true
             instance ?: ImageLoader.Builder(appContext)
                 .memoryCache {
                     coil.memory.MemoryCache.Builder(appContext)
-                        .maxSizePercent(0.10)
+                        .maxSizePercent(if (isLowRam) 0.06 else 0.10)
                         .build()
                 }
                 .fetcherDispatcher(Dispatchers.IO.limitedParallelism(3))
@@ -289,11 +292,13 @@ object RemoteArtImageLoaderProvider {
                     chain.proceed(req)
                 }
                 .build()
+            val isLowRam = (appContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+                ?.isLowRamDevice == true
             instance ?: ImageLoader.Builder(appContext)
                 .okHttpClient(okHttp)
                 .memoryCache {
                     coil.memory.MemoryCache.Builder(appContext)
-                        .maxSizePercent(0.08)
+                        .maxSizePercent(if (isLowRam) 0.04 else 0.08)
                         .build()
                 }
                 .fetcherDispatcher(Dispatchers.IO.limitedParallelism(3))

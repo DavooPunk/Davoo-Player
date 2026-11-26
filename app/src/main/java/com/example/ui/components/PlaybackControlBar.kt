@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -55,6 +56,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -242,8 +246,14 @@ fun Media3FloatingBottomBar(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            softWrap = false,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(
+                                    iterations = Int.MAX_VALUE,
+                                    repeatDelayMillis = 1500,
+                                    velocity = 30.dp
+                                )
                         )
                         format?.let { currentFormat ->
                             FormatBadge(format = currentFormat)
@@ -349,16 +359,22 @@ private fun Media3BottomBarProgressIndicator(
         mutableLongStateOf(player.duration.takeIf { it > 0L } ?: fallbackDurationMs.coerceAtLeast(0L))
     }
 
-    LaunchedEffect(player, isPlaying, fallbackDurationMs) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(player, isPlaying, fallbackDurationMs, lifecycleOwner) {
         positionMs = player.currentPosition.coerceAtLeast(0L)
         val initialDur = player.duration
         if (initialDur > 0L) durationMs = initialDur
         if (!isPlaying) return@LaunchedEffect
-        while (isActive) {
-            delay(500L)
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
-            val pDur = player.duration
-            if (pDur > 0L) durationMs = pDur
+            val startDur = player.duration
+            if (startDur > 0L) durationMs = startDur
+            while (isActive) {
+                delay(500L)
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                val pDur = player.duration
+                if (pDur > 0L) durationMs = pDur
+            }
         }
     }
 
@@ -438,14 +454,19 @@ fun ExoPlayerControlBar(
         onDispose { player.removeListener(listener) }
     }
 
-    LaunchedEffect(player, isPlaying) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(player, isPlaying, lifecycleOwner) {
         positionMs = player.currentPosition.coerceAtLeast(0L)
         durationMs = player.duration.coerceAtLeast(0L)
         if (!isPlaying) return@LaunchedEffect
-        while (isActive) {
-            delay(350L)
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             positionMs = player.currentPosition.coerceAtLeast(0L)
             durationMs = player.duration.coerceAtLeast(0L)
+            while (isActive) {
+                delay(350L)
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                durationMs = player.duration.coerceAtLeast(0L)
+            }
         }
     }
 
@@ -577,8 +598,14 @@ fun PlaybackControlBar(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
+                            softWrap = false,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(
+                                    iterations = Int.MAX_VALUE,
+                                    repeatDelayMillis = 1500,
+                                    velocity = 30.dp
+                                )
                         )
                         if (format != null) {
                             FormatBadge(format = format)

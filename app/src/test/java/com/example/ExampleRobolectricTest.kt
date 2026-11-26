@@ -499,10 +499,10 @@ class ExampleRobolectricTest {
         assertEquals(12_500L, vocalLines[0].timestampMs)
         assertEquals("First synced line", vocalLines[0].text)
         assertEquals(65_000L, vocalLines[1].timestampMs)
-        // Intro (>5s) and interlude (>8s gap) instrumental markers are inserted automatically
+        // Intro (>=4s) and interlude (>8s gap with 65ms/char min 2.5s vocal estimate) instrumental markers
         assertTrue(lyrics.lines[0].isInstrumental)
         assertEquals(0L, lyrics.lines[0].timestampMs)
-        assertTrue(lyrics.lines.any { it.isInstrumental && it.timestampMs == 12_500L + 3_500L })
+        assertTrue(lyrics.lines.any { it.isInstrumental && it.timestampMs == 12_500L + 2_500L })
 
         val cueRaw = """
             TRACK 01 AUDIO
@@ -1774,10 +1774,12 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("license_visual_assets_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("AndroidX Media3 (ExoPlayer & MediaSession)").performScrollTo().assertIsDisplayed()
 
-        // Changelog tab: Version history including v2.0.6, v2.0.5, v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
+        // Changelog tab: Version history including v2.1.1, v2.1.0, v2.0.6, v2.0.5, v2.0.4, v2.0.3, v2.0.2, v2.0.1 and v2.0.0
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("v2.0.6").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.1.1").assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.1.0").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("v2.0.6").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.5").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.4").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("v2.0.3").performScrollTo().assertIsDisplayed()
@@ -3980,10 +3982,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithText("Reproductor local · Vistas previas transmitidas desde API pública").assertIsDisplayed()
         composeTestRule.onNodeWithTag("legal_dmca_card").assertTextContains("Deezer API", substring = true)
 
-        // Verify v2.0.6 (Actual), v2.0.5 and v2.0.4 (Anterior) changelog entries omit Legal tab changes
+        // Verify v2.1.1 (Actual) and v2.1.0–v2.0.4 (Anterior) changelog entries omit Legal tab changes
         composeTestRule.onNodeWithTag("about_tab_changelog").performScrollTo().performClick()
         composeTestRule.waitForIdle()
-        composeTestRule.onNodeWithText("Compartir letras y fragmentos en Video 9:16", substring = true).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Auto-etiquetado desde la API pública de Deezer", substring = true).performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Compartir letras y fragmentos en Video 9:16", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Visor de letras inmersivo", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Crossfade real entre canciones", substring = true).performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Ir a la canción actual y cola reorganizada", substring = true).performScrollTo().assertIsDisplayed()
@@ -4673,11 +4676,11 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `lyricsShareClipCalculator enforces 1 to 6 lines offsetMs next line endMs EOF fallback and 30s cap`() {
+    fun `lyricsShareClipCalculator enforces 1 to 10 lines offsetMs next line endMs EOF fallback and 30s cap`() {
         val lyrics = com.example.model.LyricsData(
-            lines = (0 until 8).map { idx ->
+            lines = (0 until 12).map { idx ->
                 com.example.model.LyricLine(
-                    timestampMs = 10_000L + idx * 4_500L,
+                    timestampMs = 10_000L + idx * 2_500L,
                     text = "Verso número $idx",
                     secondaryText = "Line number $idx"
                 )
@@ -4688,7 +4691,7 @@ class ExampleRobolectricTest {
             offsetMs = 500L
         )
 
-        // Single line at index 1: raw 14500 - 500 = 14000, end = next line (19000 - 500 = 18500)
+        // Single line at index 1: raw 12500 - 500 = 12000, end = next line (15000 - 500 = 14500)
         val singleWindow = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
             lyrics = lyrics,
             translatedLyrics = null,
@@ -4696,36 +4699,54 @@ class ExampleRobolectricTest {
             trackDurationMs = 180_000L,
             includeTranslation = true
         )
-        assertEquals(14_000L, singleWindow.startMs)
-        assertEquals(18_500L, singleWindow.endMs)
+        assertEquals(12_000L, singleWindow.startMs)
+        assertEquals(14_500L, singleWindow.endMs)
         assertEquals(1, singleWindow.verses.size)
         assertEquals("Line number 1", singleWindow.verses.first().secondaryText)
 
-        // Selecting 6 consecutive lines (0..5) spans 9500 -> next line 6 (37000 - 500 = 36500) -> 27s (< 30s)
+        // Selecting 11 consecutive lines (0..10) spans ~35.5s (within 90s cap) -> succeeds without 10-line limit
         var range = 0..0
-        range = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 5, lyrics, 180_000L)
-        assertEquals(0..5, range)
+        range = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 9, lyrics, 180_000L)
+        assertEquals(0..9, range)
 
-        // Attempting to add line 6 (7th line) exceeds MAX_SELECTED_LINES=6 -> resets cleanly to 6..6
-        val seventh = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 6, lyrics, 180_000L)
-        assertEquals(6..6, seventh)
+        val eleventh = com.example.share.LyricsShareClipCalculator.updateSyncedSelection(range, 10, lyrics, 180_000L)
+        assertEquals(0..10, eleventh)
 
         // Last line EOF fallback: minOf(trackDuration, lastLineStart + 5000L)
         val eofWindow = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
             lyrics = lyrics,
             translatedLyrics = null,
-            selectedRange = 7..7,
-            trackDurationMs = 43_000L, // lastLineStart = 41500 - 500 = 41000; +5000 = 46000 -> clamped to 43000
+            selectedRange = 11..11,
+            trackDurationMs = 39_000L, // lastLineStart = 37500 - 500 = 37000; +5000 = 42000 -> clamped to 39000
             includeTranslation = false
         )
-        assertEquals(41_000L, eofWindow.startMs)
-        assertEquals(43_000L, eofWindow.endMs)
+        assertEquals(37_000L, eofWindow.startMs)
+        assertEquals(39_000L, eofWindow.endMs)
 
-        // Long verse span clamped cleanly to 30_000L max
+        // Long verse span within 90s (e.g., 45s) is NOT clamped; span > 90s is clamped cleanly to 90_000L max
+        val mediumLyrics = com.example.model.LyricsData(
+            lines = listOf(
+                com.example.model.LyricLine(5_000L, "Medium verse"),
+                com.example.model.LyricLine(50_000L, "Next verse")
+            ),
+            isSynced = true,
+            sourceLabel = "Local"
+        )
+        val notCapped = com.example.share.LyricsShareClipCalculator.computeSyncedClipWindow(
+            lyrics = mediumLyrics,
+            translatedLyrics = null,
+            selectedRange = 0..0,
+            trackDurationMs = 180_000L,
+            includeTranslation = false
+        )
+        assertEquals(5_000L, notCapped.startMs)
+        assertEquals(50_000L, notCapped.endMs)
+        assertFalse(notCapped.wasClampedToMaxDuration)
+
         val longLyrics = com.example.model.LyricsData(
             lines = listOf(
-                com.example.model.LyricLine(5_000L, "Long verse"),
-                com.example.model.LyricLine(50_000L, "Next verse")
+                com.example.model.LyricLine(5_000L, "Very long verse"),
+                com.example.model.LyricLine(125_000L, "Next verse")
             ),
             isSynced = true,
             sourceLabel = "Local"
@@ -4734,22 +4755,22 @@ class ExampleRobolectricTest {
             lyrics = longLyrics,
             translatedLyrics = null,
             selectedRange = 0..0,
-            trackDurationMs = 120_000L,
+            trackDurationMs = 180_000L,
             includeTranslation = false
         )
         assertEquals(5_000L, capped.startMs)
-        assertEquals(35_000L, capped.endMs)
-        assertTrue(capped.wasClampedTo30s)
+        assertEquals(95_000L, capped.endMs)
+        assertTrue(capped.wasClampedToMaxDuration)
 
-        // Unsynced range clamped strictly to 15s..30s within track duration
+        // Unsynced range clamped strictly to 15s..90s within track duration
         val unsynced = com.example.share.LyricsShareClipCalculator.computeUnsyncedWindow(
             requestedStartMs = 95_000L,
-            requestedDurationMs = 25_000L,
+            requestedDurationMs = 75_000L,
             trackDurationMs = 100_000L
         )
-        assertEquals(75_000L, unsynced.startMs)
+        assertEquals(25_000L, unsynced.startMs)
         assertEquals(100_000L, unsynced.endMs)
-        assertEquals(25_000L, unsynced.durationMs)
+        assertEquals(75_000L, unsynced.durationMs)
     }
 
     @Test
@@ -5015,7 +5036,11 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("share_lazy_column")
             .performScrollToNode(hasTestTag("share_style_amber"))
         composeTestRule.onNodeWithTag("share_style_amber").performClick()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("share_format_png"))
         composeTestRule.onNodeWithTag("share_format_png").performClick()
+        composeTestRule.onNodeWithTag("share_lazy_column")
+            .performScrollToNode(hasTestTag("share_lang_bilingual"))
         composeTestRule.onNodeWithTag("share_lang_bilingual").assertIsDisplayed()
         composeTestRule.onNodeWithTag("share_export_button").performClick()
 
@@ -5032,7 +5057,7 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("share_cancel_export_button").performClick()
         assertEquals(1, cancelledCount)
 
-        // Switch to unsynced mode (no lyrics) -> 15s-30s range selector appears
+        // Switch to unsynced mode (no lyrics) -> 15s-1:30 range selector appears
         exportState.value = com.example.share.ShareExportUiState.Idle
         showSynced.value = false
         composeTestRule.waitForIdle()
@@ -5040,15 +5065,15 @@ class ExampleRobolectricTest {
             .performScrollToNode(hasTestTag("unsynced_range_selector_card"))
         composeTestRule.onNodeWithTag("unsynced_range_selector_card").assertIsDisplayed()
         composeTestRule.onNodeWithTag("share_lazy_column")
-            .performScrollToNode(hasTestTag("share_unsynced_dur_30s"))
-        composeTestRule.onNodeWithTag("share_unsynced_dur_30s").performClick()
+            .performScrollToNode(hasTestTag("share_unsynced_dur_90s"))
+        composeTestRule.onNodeWithTag("share_unsynced_dur_90s").performClick()
         composeTestRule.onNodeWithTag("share_lazy_column")
             .performScrollToNode(hasTestTag("share_format_mp4"))
         composeTestRule.onNodeWithTag("share_format_mp4").performClick()
         composeTestRule.onNodeWithTag("share_export_button").performClick()
         assertEquals(false, capturedSpec?.isSyncedLyrics)
         assertEquals(com.example.share.ShareOutputFormat.VIDEO_MP4, capturedSpec?.format)
-        assertEquals(30_000L, capturedSpec?.clipDurationMs)
+        assertEquals(90_000L, capturedSpec?.clipDurationMs)
     }
 
     @Test
@@ -5079,7 +5104,7 @@ class ExampleRobolectricTest {
         assertNotNull(parsed)
         val lines = parsed!!.lines
 
-        // Index 0: synthetic intro at 0ms because first line > 5,000ms
+        // Index 0: synthetic intro at 0ms because first line >= 4,000ms
         assertTrue(lines[0].isInstrumental)
         assertEquals(0L, lines[0].timestampMs)
 
@@ -5088,27 +5113,26 @@ class ExampleRobolectricTest {
         assertEquals("First verse", lines[1].text)
         assertEquals(8_000L, lines[1].timestampMs)
 
-        // Index 2 & 3: Explicit "..." and empty timestamp lines -> instrumental
+        // Index 2: Explicit "..." at 12,000ms has 6,000ms >= 5,000ms before 18,000ms -> kept as instrumental
+        // while [00:15.00] (only 3,000ms < 5,000ms before 18,000ms) is ignored as a short breath pause
         assertTrue(lines[2].isInstrumental)
         assertEquals(12_000L, lines[2].timestampMs)
-        assertTrue(lines[3].isInstrumental)
-        assertEquals(15_000L, lines[3].timestampMs)
 
-        // Index 4: Second verse at 18,000ms
-        assertFalse(lines[4].isInstrumental)
-        assertEquals("Second verse", lines[4].text)
-        assertEquals(18_000L, lines[4].timestampMs)
+        // Index 3: Second verse at 18,000ms
+        assertFalse(lines[3].isInstrumental)
+        assertEquals("Second verse", lines[3].text)
+        assertEquals(18_000L, lines[3].timestampMs)
 
-        // Index 5: Synthetic interlude at 18,000 + 3,500 = 21,500ms due to 12s gap (>8s)
-        assertTrue(lines[5].isInstrumental)
-        assertEquals(21_500L, lines[5].timestampMs)
+        // Index 4: Synthetic interlude at 18,000 + 2,500 = 20,500ms due to 12s gap (>8s) and 9.5s remaining (>=5s)
+        assertTrue(lines[4].isInstrumental)
+        assertEquals(20_500L, lines[4].timestampMs)
 
-        // Index 6 & 7: Bridge (30,000ms) -> Closing line (35,000ms, gap 5s <= 8s, no interlude)
+        // Index 5 & 6: Bridge (30,000ms) -> Closing line (35,000ms, gap 5s <= 8s, no interlude)
+        assertFalse(lines[5].isInstrumental)
+        assertEquals("Bridge after long pause", lines[5].text)
         assertFalse(lines[6].isInstrumental)
-        assertEquals("Bridge after long pause", lines[6].text)
-        assertFalse(lines[7].isInstrumental)
-        assertEquals("Closing line", lines[7].text)
-        assertEquals(8, lines.size)
+        assertEquals("Closing line", lines[6].text)
+        assertEquals(7, lines.size)
 
         // LRC export skips instrumental lines cleanly
         val exported = com.example.data.repository.AudioTagParsers.exportLyricsToLrc(
@@ -5119,7 +5143,7 @@ class ExampleRobolectricTest {
         )
         assertTrue(exported.contains("[00:08.00]First verse"))
         assertFalse(exported.contains("[00:00.00]"))
-        assertFalse(exported.contains("[00:21.50]"))
+        assertFalse(exported.contains("[00:20.50]"))
     }
 
     @Test

@@ -73,6 +73,28 @@ enum class ShareCardStyle(
     )
 }
 
+enum class ShareLyricsTextSize(
+    val label: String,
+    val shortLabel: String,
+    val multiplier: Float
+) {
+    COMPACT("Estándar", "Estándar", 1.0f),
+    MEDIUM("Mediano", "Mediano", 1.25f),
+    LARGE("Grande", "Grande", 1.48f),
+    EXTRA_LARGE("Muy grande", "Extra", 1.72f)
+}
+
+enum class ShareVideoResolution(
+    val label: String,
+    val shortLabel: String,
+    val width: Int,
+    val height: Int,
+    val bitrateBps: Int
+) {
+    HD_720P("720p HD (Ligero)", "720p", 720, 1280, 3_500_000),
+    FHD_1080P("1080p Full HD", "1080p", 1080, 1920, 6_500_000)
+}
+
 @Immutable
 data class ShareLyricVerse(
     val startMs: Long,
@@ -92,7 +114,9 @@ data class LyricsShareClipSpec(
     val includeTranslation: Boolean = false,
     val style: ShareCardStyle = ShareCardStyle.DYNAMIC_ARTWORK,
     val format: ShareOutputFormat = ShareOutputFormat.VIDEO_MP4,
-    val dynamicAccentColorInt: Int = 0xFFD98A3A.toInt()
+    val dynamicAccentColorInt: Int = 0xFFD98A3A.toInt(),
+    val textSize: ShareLyricsTextSize = ShareLyricsTextSize.LARGE,
+    val videoResolution: ShareVideoResolution = ShareVideoResolution.FHD_1080P
 ) {
     val clipDurationMs: Long get() = (endMs - startMs).coerceAtLeast(1_000L)
 }
@@ -119,14 +143,13 @@ sealed interface ShareExportUiState {
 }
 
 /**
- * Pure Kotlin clip calculation logic for both synced (.lrc) 1-6 line selection
- * and unsynced 15s-30s time window selection.
+ * Pure Kotlin clip calculation logic for both synced (.lrc) unlimited verse selection (up to 1:30)
+ * and unsynced 15s-90s (1:30) time window selection.
  */
 object LyricsShareClipCalculator {
-    const val MAX_CLIP_DURATION_MS = 30_000L
+    const val MAX_CLIP_DURATION_MS = 90_000L
     const val MIN_UNSYNCED_DURATION_MS = 15_000L
     const val DEFAULT_UNSYNCED_DURATION_MS = 20_000L
-    const val MAX_SELECTED_LINES = 6
     const val EOF_FALLBACK_LINE_MS = 5_000L
 
     fun effectiveTimestampMs(rawTimestampMs: Long, offsetMs: Long): Long {
@@ -199,7 +222,7 @@ object LyricsShareClipCalculator {
         }
 
         val count = (proposed.last - proposed.first + 1)
-        if (count in 1..MAX_SELECTED_LINES) {
+        if (count >= 1) {
             val hasOnlySynced = (proposed.first..proposed.last).all { lines[it].timestampMs != null }
             if (hasOnlySynced) {
                 val window = computeSyncedClipWindow(
@@ -222,7 +245,7 @@ object LyricsShareClipCalculator {
         val endMs: Long,
         val verses: List<ShareLyricVerse>,
         val rawSpanMs: Long,
-        val wasClampedTo30s: Boolean
+        val wasClampedToMaxDuration: Boolean
     )
 
     fun computeSyncedClipWindow(
@@ -237,7 +260,7 @@ object LyricsShareClipCalculator {
             return SyncedClipWindow(0L, 5_000L, emptyList(), 5_000L, false)
         }
         val safeFirst = selectedRange.first.coerceIn(0, lines.lastIndex)
-        val safeLast = selectedRange.last.coerceIn(safeFirst, (safeFirst + MAX_SELECTED_LINES - 1).coerceAtMost(lines.lastIndex))
+        val safeLast = selectedRange.last.coerceIn(safeFirst, lines.lastIndex)
         val offset = lyrics.offsetMs
         val effectiveDurationMs = trackDurationMs.takeIf { it > 0L } ?: Long.MAX_VALUE
 
@@ -290,7 +313,7 @@ object LyricsShareClipCalculator {
             endMs = finalEnd.coerceAtLeast(firstStartMs + 1_000L),
             verses = verses,
             rawSpanMs = rawSpan,
-            wasClampedTo30s = clamped
+            wasClampedToMaxDuration = clamped
         )
     }
 
@@ -980,107 +1003,239 @@ object LyricsShareCardRenderer {
         scale: Float
     ) {
         val verses = spec.verses
-        val count = verses.size.coerceAtLeast(1)
+        if (verses.isEmpty()) return
+        val count = verses.size
         val hasTrans = spec.includeTranslation && verses.any { !it.secondaryText.isNullOrBlank() }
 
-        // Adaptive font size so 1-6 lines (with optional translation) always fit comfortably
-        var primarySizeSp = when {
-            count <= 2 && !hasTrans -> 38f
-            count <= 3 && !hasTrans -> 33f
-            count <= 4 && !hasTrans -> 29f
-            count <= 5 && !hasTrans -> 26f
-            hasTrans && count <= 3 -> 27f
-            else -> 22.5f
-        } * scale
+        if (isStaticImage) {
+            val baseSize = when {
+                count <= 2 && !hasTrans -> 42f
+                count <= 3 && !hasTrans -> 37f
+                count <= 5 && !hasTrans -> 31f
+                count <= 8 && !hasTrans -> 25.5f
+                hasTrans && count <= 3 -> 30f
+                hasTrans && count <= 6 -> 24.5f
+                else -> 21f
+            }
+            var primarySizeSp = baseSize * spec.textSize.multiplier * scale
+            var verseGap = (when {
+                count <= 3 -> 22f
+                count <= 6 -> 15f
+                else -> 10f
+            }) * scale
+            var primaryLayouts: List<StaticLayout>
+            var secondaryLayouts: List<StaticLayout?>
+            var totalHeight: Float
+            var attempt = 0
+            while (true) {
+                val secSizeSp = (primarySizeSp * 0.72f).coerceAtLeast(13f * scale)
+                val pList = ArrayList<StaticLayout>(verses.size)
+                val sList = ArrayList<StaticLayout?>(verses.size)
+                var hAccum = 0f
 
-        var verseGap = (if (count <= 3) 22f else 15f) * scale
-        var primaryLayouts: List<StaticLayout>
-        var secondaryLayouts: List<StaticLayout?>
-        var totalHeight: Float
-
-        // Auto-shrink if wrapped lines exceed available card height
-        var attempt = 0
-        while (true) {
-            val secSizeSp = (primarySizeSp * 0.72f).coerceAtLeast(15f * scale)
-            val pList = ArrayList<StaticLayout>(verses.size)
-            val sList = ArrayList<StaticLayout?>(verses.size)
-            var hAccum = 0f
-
-            for (idx in verses.indices) {
-                val verse = verses[idx]
-                val isCurrent = isStaticImage || (absoluteTimeMs >= verse.startMs && absoluteTimeMs < verse.endMs)
-                val isPast = !isStaticImage && absoluteTimeMs >= verse.endMs
-                val textColor = when {
-                    isCurrent -> 0xFFFFFFFF.toInt()
-                    isPast -> 0xB8FFFFFF.toInt()
-                    else -> 0x73FFFFFF.toInt()
-                }
-                val pPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = textColor
-                    textSize = primarySizeSp
-                    typeface = Typeface.create(
-                        Typeface.DEFAULT,
-                        if (isCurrent) Typeface.BOLD else Typeface.NORMAL
-                    )
-                }
-                val pLayout = buildBoundedStaticLayout(verse.text, pPaint, contentWidth, maxLines = 3)
-                pList += pLayout
-                hAccum += pLayout.height
-
-                val sec = if (hasTrans) verse.secondaryText?.takeIf { it.isNotBlank() } else null
-                if (sec != null) {
-                    val secBase = ColorUtils.blendARGB(accentInt, 0xFFFFFFFF.toInt(), 0.55f)
-                    val secColor = ColorUtils.setAlphaComponent(
-                        secBase,
-                        when {
-                            isCurrent -> 240
-                            isPast -> 170
-                            else -> 115
-                        }
-                    )
-                    val sPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = secColor
-                        textSize = secSizeSp
-                        typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                for (idx in verses.indices) {
+                    val verse = verses[idx]
+                    val pPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = 0xFFFFFFFF.toInt()
+                        textSize = primarySizeSp
+                        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                     }
-                    val sLayout = buildBoundedStaticLayout(sec, sPaint, contentWidth, maxLines = 2)
-                    sList += sLayout
-                    hAccum += 4f * scale + sLayout.height
-                } else {
-                    sList += null
+                    val pLayout = buildBoundedStaticLayout(verse.text, pPaint, contentWidth, maxLines = if (count <= 6) 4 else 3)
+                    pList += pLayout
+                    hAccum += pLayout.height
+
+                    val sec = if (hasTrans) verse.secondaryText?.takeIf { it.isNotBlank() } else null
+                    if (sec != null) {
+                        val sPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                            color = ColorUtils.blendARGB(accentInt, 0xFFFFFFFF.toInt(), 0.55f)
+                            textSize = secSizeSp
+                            typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                        }
+                        val sLayout = buildBoundedStaticLayout(sec, sPaint, contentWidth, maxLines = 2)
+                        sList += sLayout
+                        hAccum += 4f * scale + sLayout.height
+                    } else {
+                        sList += null
+                    }
+                    if (idx < verses.lastIndex) hAccum += verseGap
                 }
 
-                if (idx < verses.lastIndex) {
-                    hAccum += verseGap
-                }
+                primaryLayouts = pList
+                secondaryLayouts = sList
+                totalHeight = hAccum
+                if (totalHeight <= bodyHeight || attempt >= 14) break
+                primarySizeSp *= 0.89f
+                verseGap *= 0.88f
+                attempt++
             }
 
-            primaryLayouts = pList
-            secondaryLayouts = sList
-            totalHeight = hAccum
-            if (totalHeight <= bodyHeight || attempt >= 5) {
-                break
+            canvas.save()
+            canvas.clipRect(contentLeft - 18f * scale, bodyTop, contentLeft + contentWidth + 8f * scale, bodyTop + bodyHeight)
+            var cursorY = bodyTop + ((bodyHeight - totalHeight) / 2f).coerceAtLeast(0f)
+            for (idx in verses.indices) {
+                val pLayout = primaryLayouts[idx]
+                val sLayout = secondaryLayouts[idx]
+                canvas.save()
+                canvas.translate(contentLeft, cursorY)
+                pLayout.draw(canvas)
+                canvas.restore()
+                cursorY += pLayout.height
+                if (sLayout != null) {
+                    cursorY += 4f * scale
+                    canvas.save()
+                    canvas.translate(contentLeft, cursorY)
+                    sLayout.draw(canvas)
+                    canvas.restore()
+                    cursorY += sLayout.height
+                }
+                cursorY += verseGap
             }
-            primarySizeSp *= 0.88f
-            verseGap *= 0.85f
-            attempt++
+            canvas.restore()
+            return
         }
 
-        var cursorY = bodyTop + ((bodyHeight - totalHeight) / 2f).coerceAtLeast(0f)
+        // Animated Spotify-style continuous vertical scroll for MP4 clips (supports any verse count up to 1:30)
+        val activeIdx = run {
+            var idx = verses.indexOfFirst { absoluteTimeMs >= it.startMs && absoluteTimeMs < it.endMs }
+            if (idx < 0) {
+                idx = verses.indexOfLast { absoluteTimeMs >= it.startMs }.coerceAtLeast(0)
+            }
+            idx.coerceIn(0, verses.lastIndex)
+        }
+        val activeVerse = verses[activeIdx]
+        val transitionDurationMs = 380L
+        val sinceActiveStartMs = (absoluteTimeMs - activeVerse.startMs).coerceAtLeast(0L)
+        val transitionProgress = if (activeIdx > 0 && sinceActiveStartMs < transitionDurationMs) {
+            val t = (sinceActiveStartMs.toFloat() / transitionDurationMs.toFloat()).coerceIn(0f, 1f)
+            // FastOutSlowIn-like cubic ease
+            if (t < 0.5f) 4f * t * t * t else 1f - ((-2f * t + 2f) * (-2f * t + 2f) * (-2f * t + 2f)) / 2f
+        } else {
+            1f
+        }
+
+        // Keep comfortable reading typography regardless of total clip length
+        val primarySizeSp = (if (hasTrans) 31f else 36f) * spec.textSize.multiplier * scale
+        val secSizeSp = (primarySizeSp * 0.72f).coerceAtLeast(15f * scale)
+        val verseGap = (if (hasTrans) 28f else 24f) * scale
+        val maxActiveWidth = (contentWidth / 1.055f).toInt().coerceAtLeast(120)
+
+        val pLayouts = ArrayList<StaticLayout>(count)
+        val sLayouts = ArrayList<StaticLayout?>(count)
+        val blockTops = FloatArray(count)
+        val blockHeights = FloatArray(count)
+        val blockCenters = FloatArray(count)
+        var virtualY = 0f
+
         for (idx in verses.indices) {
             val verse = verses[idx]
-            val pLayout = primaryLayouts[idx]
-            val sLayout = secondaryLayouts[idx]
-            val isActive = !isStaticImage && absoluteTimeMs >= verse.startMs && absoluteTimeMs < verse.endMs
+            val isCurrent = idx == activeIdx
+            val isPreviousTransitioningOut = activeIdx > 0 && idx == activeIdx - 1 && transitionProgress < 1f
+            val activeWeight = when {
+                isCurrent -> transitionProgress
+                isPreviousTransitioningOut -> 1f - transitionProgress
+                else -> 0f
+            }
 
-            if (isActive) {
+            val baseAlpha = (102 + (153f * activeWeight)).roundToInt().coerceIn(95, 255)
+            val pColor = ColorUtils.setAlphaComponent(0xFFFFFF, baseAlpha)
+            val pPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = pColor
+                textSize = primarySizeSp
+                typeface = Typeface.create(
+                    Typeface.DEFAULT,
+                    if (isCurrent) Typeface.BOLD else Typeface.NORMAL
+                )
+            }
+            val pLayout = buildBoundedStaticLayout(verse.text, pPaint, maxActiveWidth, maxLines = 4)
+            pLayouts += pLayout
+
+            val sec = if (hasTrans) verse.secondaryText?.takeIf { it.isNotBlank() } else null
+            val sLayout = if (sec != null) {
+                val secBase = ColorUtils.blendARGB(accentInt, 0xFFFFFFFF.toInt(), 0.55f)
+                val secAlpha = (108 + (132f * activeWeight)).roundToInt().coerceIn(100, 240)
+                val sPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = ColorUtils.setAlphaComponent(secBase, secAlpha)
+                    textSize = secSizeSp
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                }
+                buildBoundedStaticLayout(sec, sPaint, maxActiveWidth, maxLines = 3)
+            } else null
+            sLayouts += sLayout
+
+            val blockH = pLayout.height + (sLayout?.let { 6f * scale + it.height } ?: 0f)
+            blockTops[idx] = virtualY
+            blockHeights[idx] = blockH
+            blockCenters[idx] = virtualY + blockH / 2f
+            virtualY += blockH + verseGap
+        }
+
+        val targetTapeCenterY = if (activeIdx > 0 && transitionProgress < 1f) {
+            blockCenters[activeIdx - 1] + (blockCenters[activeIdx] - blockCenters[activeIdx - 1]) * transitionProgress
+        } else {
+            blockCenters[activeIdx]
+        }
+
+        val bodyCenterY = bodyTop + bodyHeight * 0.48f
+        val scrollOffsetY = bodyCenterY - targetTapeCenterY
+        val bodyBottom = bodyTop + bodyHeight
+        val edgeFadeZone = (bodyHeight * 0.14f).coerceAtLeast(24f * scale)
+
+        canvas.save()
+        canvas.clipRect(
+            contentLeft - 22f * scale,
+            bodyTop,
+            contentLeft + contentWidth + 12f * scale,
+            bodyBottom
+        )
+
+        for (idx in verses.indices) {
+            val blockTopScreen = blockTops[idx] + scrollOffsetY
+            val blockH = blockHeights[idx]
+            val blockBottomScreen = blockTopScreen + blockH
+            if (blockBottomScreen < bodyTop - 24f * scale || blockTopScreen > bodyBottom + 24f * scale) {
+                continue
+            }
+
+            val isCurrent = idx == activeIdx
+            val isPreviousOut = activeIdx > 0 && idx == activeIdx - 1 && transitionProgress < 1f
+            val activeWeight = when {
+                isCurrent -> transitionProgress
+                isPreviousOut -> 1f - transitionProgress
+                else -> 0f
+            }
+
+            val blockCenterScreen = blockTopScreen + blockH / 2f
+            val distToTop = (blockCenterScreen - bodyTop).coerceAtLeast(0f)
+            val distToBottom = (bodyBottom - blockCenterScreen).coerceAtLeast(0f)
+            val edgeAlphaFactor = (minOf(distToTop, distToBottom) / edgeFadeZone).coerceIn(0.18f, 1f)
+
+            val pLayout = pLayouts[idx]
+            val sLayout = sLayouts[idx]
+            val scaleFactor = 1.0f + 0.055f * activeWeight
+
+            val pPaint = pLayout.paint
+            val basePrimaryAlpha = (102 + (153f * activeWeight)).roundToInt()
+            pPaint.alpha = (basePrimaryAlpha * edgeAlphaFactor).roundToInt().coerceIn(25, 255)
+            sLayout?.paint?.let { sp ->
+                val baseSecAlpha = (108 + (132f * activeWeight)).roundToInt()
+                sp.alpha = (baseSecAlpha * edgeAlphaFactor).roundToInt().coerceIn(25, 240)
+            }
+
+            if (activeWeight > 0.05f) {
                 val barX = contentLeft - 14f * scale
                 val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = ColorUtils.blendARGB(accentInt, 0xFFFFFFFF.toInt(), 0.25f)
+                    color = ColorUtils.setAlphaComponent(
+                        ColorUtils.blendARGB(accentInt, 0xFFFFFFFF.toInt(), 0.25f),
+                        (235f * activeWeight * edgeAlphaFactor).roundToInt().coerceIn(0, 255)
+                    )
                 }
-                val activeBlockH = pLayout.height + (sLayout?.let { it.height + 4f * scale } ?: 0f)
                 canvas.drawRoundRect(
-                    RectF(barX, cursorY + 4f * scale, barX + 5f * scale, cursorY + activeBlockH - 4f * scale),
+                    RectF(
+                        barX,
+                        blockTopScreen + 4f * scale,
+                        barX + 5f * scale,
+                        blockBottomScreen - 4f * scale
+                    ),
                     3f * scale,
                     3f * scale,
                     barPaint
@@ -1088,22 +1243,19 @@ object LyricsShareCardRenderer {
             }
 
             canvas.save()
-            canvas.translate(contentLeft, cursorY)
-            pLayout.draw(canvas)
-            canvas.restore()
-            cursorY += pLayout.height
-
-            if (sLayout != null) {
-                cursorY += 4f * scale
-                canvas.save()
-                canvas.translate(contentLeft, cursorY)
-                sLayout.draw(canvas)
-                canvas.restore()
-                cursorY += sLayout.height
+            canvas.translate(contentLeft, blockTopScreen)
+            if (scaleFactor > 1.001f) {
+                canvas.scale(scaleFactor, scaleFactor, 0f, blockH / 2f)
             }
-
-            cursorY += verseGap
+            pLayout.draw(canvas)
+            if (sLayout != null) {
+                canvas.translate(0f, pLayout.height + 6f * scale)
+                sLayout.draw(canvas)
+            }
+            canvas.restore()
         }
+
+        canvas.restore()
     }
 
     private fun drawUnsyncedVisualizerBody(
@@ -1120,17 +1272,27 @@ object LyricsShareCardRenderer {
         scale: Float
     ) {
         val excerpt = spec.plainExcerpt?.trim()?.takeIf { it.isNotEmpty() }
-        val heroArtSize = (if (excerpt != null) 210f else 270f) * scale
-        val visualizerH = 96f * scale
-        val gap = 28f * scale
+        val heroArtSize = (if (excerpt != null) 196f else 270f) * scale
+        val visualizerH = 92f * scale
+        val gap = 24f * scale
 
-        val excerptLayout = excerpt?.let {
-            val p = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = 0xEAFFFFFF.toInt()
-                textSize = 23f * scale
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+        val excerptLayout = excerpt?.let { text ->
+            var excerptSize = (24f * spec.textSize.multiplier).coerceAtMost(38f) * scale
+            var built: StaticLayout
+            var attempt = 0
+            while (true) {
+                val p = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xEAFFFFFF.toInt()
+                    textSize = excerptSize
+                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                }
+                built = buildBoundedStaticLayout(text, p, contentWidth, maxLines = 5, alignment = Layout.Alignment.ALIGN_CENTER)
+                val projectedTotal = heroArtSize + gap + visualizerH + gap + built.height
+                if (projectedTotal <= bodyHeight || attempt >= 6) break
+                excerptSize *= 0.88f
+                attempt++
             }
-            buildBoundedStaticLayout(it, p, contentWidth, maxLines = 4, alignment = Layout.Alignment.ALIGN_CENTER)
+            built
         }
 
         val totalBlockH = heroArtSize + gap + visualizerH + (excerptLayout?.let { gap + it.height } ?: 0f)

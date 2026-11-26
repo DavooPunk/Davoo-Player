@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
@@ -11,9 +12,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -33,16 +37,15 @@ import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -52,8 +55,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,7 +84,6 @@ import com.example.model.HeadphoneEqProfile
 import java.util.Locale
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EqualizerAndDspSheet(
     settings: AudioSettings,
@@ -89,9 +93,9 @@ fun EqualizerAndDspSheet(
     onUpdateSettingsThrottled: (AudioSettings, Boolean) -> Unit = { s, _ -> onUpdateSettings(s) },
     customProfiles: List<HeadphoneEqProfile> = emptyList(),
     onSaveCustomProfile: (name: String, AudioSettings) -> Unit = { _, _ -> },
-    onDeleteCustomProfile: (profileId: String) -> Unit = {}
+    onDeleteCustomProfile: (profileId: String) -> Unit = {},
+    onImportAutoEqTxt: () -> Unit = {}
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var draftSettings by remember { mutableStateOf(settings) }
     var isDraggingSlider by remember { mutableStateOf(false) }
     var headphoneQuery by remember { mutableStateOf("") }
@@ -132,34 +136,35 @@ fun EqualizerAndDspSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = {
-            if (isDraggingSlider) {
-                isDraggingSlider = false
-                onUpdateSettingsThrottled(draftSettings, true)
-            }
-            onDismiss()
-        },
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+    val closeSheet: () -> Unit = {
+        if (isDraggingSlider) {
+            isDraggingSlider = false
+            onUpdateSettingsThrottled(draftSettings, true)
+        }
+        onDismiss()
+    }
+
+    BackHandler(onBack = closeSheet)
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .testTag("equalizer_dsp_sheet"),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Icon(
                         imageVector = Icons.Rounded.Equalizer,
@@ -178,10 +183,28 @@ fun EqualizerAndDspSheet(
                         )
                     }
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = closeSheet,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("close_equalizer_button")
+                ) {
                     Icon(Icons.Rounded.Close, contentDescription = "Cerrar ecualizador")
                 }
             }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 14.dp)
+                    .padding(bottom = 24.dp)
+                    .testTag("equalizer_dsp_sheet"),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
 
             // Master EQ switch
             Surface(
@@ -321,7 +344,8 @@ fun EqualizerAndDspSheet(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Headphones,
@@ -332,8 +356,27 @@ fun EqualizerAndDspSheet(
                             Text(
                                 text = "Perfiles de audífonos (AutoEq)",
                                 style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onImportAutoEqTxt,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("eq_import_txt_button")
+                        ) {
+                            Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Importar .txt", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         OutlinedButton(
                             onClick = {
@@ -341,11 +384,13 @@ fun EqualizerAndDspSheet(
                                 showSaveProfileDialog = true
                             },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier.testTag("save_custom_eq_profile_button")
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("save_custom_eq_profile_button")
                         ) {
                             Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Guardar perfil", style = MaterialTheme.typography.labelMedium)
+                            Text("Guardar perfil", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
 
@@ -392,7 +437,11 @@ fun EqualizerAndDspSheet(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             contentPadding = PaddingValues(vertical = 2.dp)
                         ) {
-                            items(filteredProfiles, key = { it.id }) { profile ->
+                            items(
+                                items = filteredProfiles,
+                                key = { it.id },
+                                contentType = { "autoeq_profile" }
+                            ) { profile ->
                                 val isSelected = draftSettings.activeProfileId == profile.id
                                 Surface(
                                     onClick = {
@@ -494,7 +543,11 @@ fun EqualizerAndDspSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 2.dp)
             ) {
-                items(EqPreset.entries) { preset ->
+                items(
+                    items = EqPreset.entries,
+                    key = { it.name },
+                    contentType = { "eq_preset" }
+                ) { preset ->
                     val selected = draftSettings.eqPreset == preset && draftSettings.activeProfileId == null
                     FilterChip(
                         selected = selected,
@@ -797,7 +850,11 @@ fun EqualizerAndDspSheet(
                     modifier = Modifier.testTag("crossfade_slider")
                 )
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf(0, 2, 5, 8, 12)) { sec ->
+                    items(
+                        items = listOf(0, 2, 5, 8, 12),
+                        key = { it },
+                        contentType = { "crossfade_chip" }
+                    ) { sec ->
                         FilterChip(
                             selected = draftSettings.crossfadeSeconds == sec,
                             onClick = { commitImmediate(draftSettings.copy(crossfadeSeconds = sec)) },
@@ -817,7 +874,11 @@ fun EqualizerAndDspSheet(
                     Text("Velocidad de reproducción", style = MaterialTheme.typography.bodyMedium)
                 }
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)) { spd ->
+                    items(
+                        items = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f),
+                        key = { it },
+                        contentType = { "speed_chip" }
+                    ) { spd ->
                         val isSel = kotlin.math.abs(draftSettings.playbackSpeed - spd) < 0.03f
                         FilterChip(
                             selected = isSel,
@@ -862,6 +923,7 @@ fun EqualizerAndDspSheet(
                 onCheckedChange = { commitImmediate(draftSettings.copy(gaplessEnabled = it)) },
                 testTag = "gapless_switch"
             )
+            }
         }
     }
 
@@ -1032,7 +1094,6 @@ private fun SettingToggleRow(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SleepTimerSheet(
     remainingMs: Long?,
@@ -1042,34 +1103,50 @@ fun SleepTimerSheet(
     onCancelTimer: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalBottomSheet(
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Column(
+        BackHandler(onBack = onDismiss)
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 8.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .testTag("sleep_timer_sheet"),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .widthIn(max = 460.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .testTag("sleep_timer_sheet"),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Text("Temporizador de apagado", style = MaterialTheme.typography.titleLarge)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Bedtime, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Text("Temporizador de apagado", style = MaterialTheme.typography.titleLarge)
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("close_sleep_timer_button")
+                    ) {
+                        Icon(Icons.Rounded.Close, contentDescription = "Cerrar temporizador")
+                    }
                 }
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Cerrar temporizador")
-                }
-            }
 
             if (remainingMs != null || stopAfterCurrentTrack) {
                 Surface(
@@ -1162,6 +1239,7 @@ fun SleepTimerSheet(
                 Icon(Icons.Rounded.Bedtime, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Al finalizar la canción actual")
+            }
             }
         }
     }

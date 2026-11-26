@@ -7,7 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.repository.DeviceMusicScanner
@@ -28,6 +32,20 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             val sonoraViewModel: SonoraViewModel = viewModel()
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner, sonoraViewModel) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_START -> sonoraViewModel.setUiForeground(true)
+                        Lifecycle.Event.ON_STOP -> sonoraViewModel.setUiForeground(false)
+                        else -> Unit
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
             val appearancePreferences by sonoraViewModel.appearancePreferences.collectAsStateWithLifecycle()
             SonoraTheme(appearance = appearancePreferences) {
                 SonoraApp(viewModel = sonoraViewModel)

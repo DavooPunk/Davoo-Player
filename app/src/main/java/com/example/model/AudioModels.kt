@@ -252,6 +252,193 @@ data class HeadphoneEqProfile(
 
 object AutoEqProfilesCatalog {
     val builtInProfiles: List<HeadphoneEqProfile> = listOf(
+        // KZ (Knowledge Zenith) IEMs
+        HeadphoneEqProfile(
+            id = "autoeq_kz_edx",
+            brand = "KZ",
+            model = "EDX",
+            formFactor = "IEM Dinámico",
+            preampDb = -4.2f,
+            bandGainsMb = listOf(-120, -180, -240, -140, 110, 240, -180, -320, -190, 140)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_edx_pro",
+            brand = "KZ",
+            model = "EDX Pro",
+            formFactor = "IEM Dinámico",
+            preampDb = -4.6f,
+            bandGainsMb = listOf(-140, -220, -290, -150, 130, 280, -240, -380, -220, 160)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_edx_pro_x",
+            brand = "KZ",
+            model = "EDX Pro X",
+            formFactor = "IEM Dinámico",
+            preampDb = -4.1f,
+            bandGainsMb = listOf(-80, -150, -210, -110, 120, 260, -190, -300, -160, 150)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_edx_pro_2",
+            brand = "KZ",
+            model = "EDX Pro 2",
+            formFactor = "IEM Dinámico",
+            preampDb = -3.9f,
+            bandGainsMb = listOf(-60, -120, -180, -90, 110, 230, -160, -260, -130, 120)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_castor_harman",
+            brand = "KZ",
+            model = "Castor (Harman)",
+            formFactor = "IEM Dual Dinámico",
+            preampDb = -3.5f,
+            bandGainsMb = listOf(60, 40, -90, -110, 90, 210, 120, -140, -80, 100)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_castor_bass",
+            brand = "KZ",
+            model = "Castor (Bass)",
+            formFactor = "IEM Dual Dinámico",
+            preampDb = -4.5f,
+            bandGainsMb = listOf(-260, -320, -240, -80, 140, 270, 160, -120, -90, 110)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_zsn_pro",
+            brand = "KZ",
+            model = "ZSN Pro (IEM)",
+            formFactor = "IEM Híbrido",
+            preampDb = -3.8f,
+            bandGainsMb = listOf(160, -120, -240, -100, 180, 260, -280, -360, -220, 180)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_zsn_pro_x",
+            brand = "KZ",
+            model = "ZSN Pro X",
+            formFactor = "IEM Híbrido",
+            preampDb = -4.4f,
+            bandGainsMb = listOf(80, -160, -260, -120, 160, 270, -240, -410, -260, 170)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_zs10_pro",
+            brand = "KZ",
+            model = "ZS10 Pro",
+            formFactor = "IEM 5 Drivers",
+            preampDb = -4.0f,
+            bandGainsMb = listOf(120, -140, -220, -90, 150, 250, -190, -340, -210, 160)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_zs10_pro_x",
+            brand = "KZ",
+            model = "ZS10 Pro X",
+            formFactor = "IEM 5 Drivers",
+            preampDb = -3.7f,
+            bandGainsMb = listOf(90, -90, -180, -80, 120, 220, -140, -290, -180, 150)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_dfi",
+            brand = "KZ",
+            model = "D-Fi",
+            formFactor = "IEM Tunable",
+            preampDb = -3.2f,
+            bandGainsMb = listOf(110, 50, -110, -80, 90, 190, 140, -110, -70, 90)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_kz_pr2",
+            brand = "KZ",
+            model = "PR2",
+            formFactor = "IEM Planar",
+            preampDb = -4.9f,
+            bandGainsMb = listOf(180, 100, -130, -120, 110, 240, -120, -420, -280, 120)
+        ),
+        // Chi-Fi IEMs populares
+        HeadphoneEqProfile(
+            id = "autoeq_moondrop_chu",
+            brand = "Moondrop",
+            model = "Chu",
+            formFactor = "IEM Dinámico",
+            preampDb = -3.6f,
+            bandGainsMb = listOf(220, 160, 40, -60, 60, 130, -160, -260, -140, 100)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_moondrop_chu_2",
+            brand = "Moondrop",
+            model = "Chu II",
+            formFactor = "IEM Dinámico",
+            preampDb = -2.8f,
+            bandGainsMb = listOf(110, 60, -70, -60, 70, 160, 90, -90, 60, 110)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_moondrop_aria",
+            brand = "Moondrop",
+            model = "Aria",
+            formFactor = "IEM LCP",
+            preampDb = -2.6f,
+            bandGainsMb = listOf(120, 40, -90, -70, 80, 150, 120, -80, 40, 120)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_tangzu_waner",
+            brand = "Tangzu",
+            model = "Wan'er S.G",
+            formFactor = "IEM Dinámico",
+            preampDb = -2.9f,
+            bandGainsMb = listOf(130, 50, -80, -60, 90, 140, 80, -120, 50, 140)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_7hz_salnotes_zero",
+            brand = "7Hz",
+            model = "Salnotes Zero",
+            formFactor = "IEM Neutro",
+            preampDb = -3.1f,
+            bandGainsMb = listOf(210, 140, -40, -70, 80, 140, -90, -170, -60, 110)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_7hz_zero_2",
+            brand = "7Hz",
+            model = "x Crinacle Zero:2",
+            formFactor = "IEM Dinámico",
+            preampDb = -2.5f,
+            bandGainsMb = listOf(90, 20, -100, -80, 60, 170, 130, -60, 40, 120)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_truthear_zero",
+            brand = "Truthear",
+            model = "x Crinacle Zero",
+            formFactor = "IEM Dual DD",
+            preampDb = -3.0f,
+            bandGainsMb = listOf(140, 80, -40, 90, 100, -110, -180, -60, 90, 130)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_truthear_zero_red",
+            brand = "Truthear",
+            model = "Zero:RED",
+            formFactor = "IEM Dual DD",
+            preampDb = -2.4f,
+            bandGainsMb = listOf(150, 100, 30, -40, 60, 110, 90, 60, 40, 110)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_truthear_hola",
+            brand = "Truthear",
+            model = "Hola",
+            formFactor = "IEM Dinámico",
+            preampDb = -3.1f,
+            bandGainsMb = listOf(120, 40, -90, -70, 80, 190, 160, 90, 120, 160)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_cca_cra",
+            brand = "CCA",
+            model = "CRA",
+            formFactor = "IEM V-Shape",
+            preampDb = -4.7f,
+            bandGainsMb = listOf(-180, -240, -210, -110, 140, 290, -220, -390, -240, 110)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_qkz_hbb",
+            brand = "QKZ",
+            model = "x HBB",
+            formFactor = "IEM Warm Bass",
+            preampDb = -4.3f,
+            bandGainsMb = listOf(-210, -310, -290, -140, 130, 260, 210, 80, 120, 180)
+        ),
+        // Over-Ear, Estudio y TWS
         HeadphoneEqProfile(
             id = "autoeq_sony_xm4",
             brand = "Sony",
@@ -267,6 +454,14 @@ object AutoEqProfilesCatalog {
             formFactor = "Over-Ear ANC",
             preampDb = -4.2f,
             bandGainsMb = listOf(-100, -380, -450, -220, 140, 260, 310, 420, 300, 150)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_sony_mdr_7506",
+            brand = "Sony",
+            model = "MDR-7506",
+            formFactor = "Estudio Cerrado",
+            preampDb = -4.5f,
+            bandGainsMb = listOf(280, 190, 40, -90, 60, 110, -210, -340, -240, 120)
         ),
         HeadphoneEqProfile(
             id = "autoeq_airpods_pro_2",
@@ -293,20 +488,28 @@ object AutoEqProfilesCatalog {
             bandGainsMb = listOf(560, 420, 180, -80, -140, 40, -120, 180, 260, 320)
         ),
         HeadphoneEqProfile(
+            id = "autoeq_sennheiser_hd650",
+            brand = "Sennheiser",
+            model = "HD 650",
+            formFactor = "Open-Back Estudio",
+            preampDb = -5.8f,
+            bandGainsMb = listOf(580, 440, 140, -120, -160, 60, 40, 240, 310, 340)
+        ),
+        HeadphoneEqProfile(
+            id = "autoeq_philips_shp9500",
+            brand = "Philips",
+            model = "SHP9500",
+            formFactor = "Open-Back",
+            preampDb = -5.2f,
+            bandGainsMb = listOf(520, 380, 190, 40, -60, 90, -80, -260, 140, 210)
+        ),
+        HeadphoneEqProfile(
             id = "autoeq_ath_m50x",
             brand = "Audio-Technica",
             model = "ATH-M50x",
             formFactor = "Estudio Cerrado",
             preampDb = -4.4f,
             bandGainsMb = listOf(220, -180, -320, -120, 180, 280, 440, 180, -240, 160)
-        ),
-        HeadphoneEqProfile(
-            id = "autoeq_kz_zsn_pro",
-            brand = "KZ",
-            model = "ZSN Pro (IEM)",
-            formFactor = "IEM Híbrido",
-            preampDb = -3.8f,
-            bandGainsMb = listOf(160, -120, -240, -100, 180, 260, -280, -360, -220, 180)
         ),
         HeadphoneEqProfile(
             id = "autoeq_jbl_tune_720bt",
@@ -335,6 +538,92 @@ object AutoEqProfilesCatalog {
     )
 }
 
+object AutoEqGraphicEqParser {
+    private val pointRegex = Regex("""(\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)""")
+
+    fun parseGraphicEqTxt(rawText: String, fileNameHint: String? = null): HeadphoneEqProfile? {
+        if (rawText.isBlank()) return null
+        val graphicLine = rawText
+            .lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith("GraphicEQ:", ignoreCase = true) }
+            ?: return null
+
+        val payload = graphicLine.substringAfter(':', "").trim()
+        if (payload.isBlank()) return null
+
+        val points = payload.split(';')
+            .mapNotNull { entry ->
+                val match = pointRegex.find(entry.trim()) ?: return@mapNotNull null
+                val hz = match.groupValues[1].toDoubleOrNull() ?: return@mapNotNull null
+                val db = match.groupValues[2].toDoubleOrNull() ?: return@mapNotNull null
+                if (!hz.isFinite() || hz <= 0.0 || !db.isFinite()) return@mapNotNull null
+                hz to db.coerceIn(-18.0, 18.0)
+            }
+            .sortedBy { it.first }
+
+        if (points.size < 2) return null
+
+        val gainsMb = TEN_BAND_CENTERS_HZ.map { centerHz ->
+            val targetHz = centerHz.toDouble()
+            val interpolatedDb = when {
+                targetHz <= points.first().first -> points.first().second
+                targetHz >= points.last().first -> points.last().second
+                else -> {
+                    val hiIdx = points.indexOfFirst { it.first >= targetHz }
+                    if (hiIdx <= 0) {
+                        points.first().second
+                    } else {
+                        val (f0, g0) = points[hiIdx - 1]
+                        val (f1, g1) = points[hiIdx]
+                        if (kotlin.math.abs(f1 - f0) < 1e-6) {
+                            g0
+                        } else {
+                            val logTarget = kotlin.math.ln(targetHz)
+                            val log0 = kotlin.math.ln(f0)
+                            val log1 = kotlin.math.ln(f1)
+                            val t = ((logTarget - log0) / (log1 - log0)).coerceIn(0.0, 1.0)
+                            g0 + (g1 - g0) * t
+                        }
+                    }
+                }
+            }
+            (interpolatedDb * 100.0).toInt().coerceIn(-1200, 1200)
+        }
+
+        val maxPeakDb = (gainsMb.maxOrNull() ?: 0) / 100f
+        val safePreampDb = if (maxPeakDb > 0f) {
+            (-kotlin.math.ceil((maxPeakDb * 10f).toDouble()).toFloat() / 10f).coerceIn(-12f, 0f)
+        } else {
+            0f
+        }
+
+        val cleanName = fileNameHint
+            ?.substringAfterLast('/')
+            ?.substringBeforeLast('.')
+            ?.replace("GraphicEQ", "", ignoreCase = true)
+            ?.replace('_', ' ')
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "AutoEq Importado"
+
+        val idSlug = cleanName.lowercase()
+            .replace(Regex("[^a-z0-9]+"), "_")
+            .trim('_')
+            .ifBlank { System.currentTimeMillis().toString() }
+
+        return HeadphoneEqProfile(
+            id = "autoeq_import_$idSlug",
+            brand = "AutoEq .txt",
+            model = cleanName,
+            formFactor = "GraphicEQ 10B",
+            preampDb = safePreampDb,
+            bandGainsMb = gainsMb,
+            isCustom = true
+        )
+    }
+}
+
 @Immutable
 data class AudioSettings(
     val eqEnabled: Boolean = false,
@@ -348,9 +637,27 @@ data class AudioSettings(
     val crossfadeSeconds: Int = 0,
     val gaplessEnabled: Boolean = true,
     val replayGainEnabled: Boolean = false,
+    val replayGainPreampDb: Float = 3.0f,
+    val replayGainUntaggedPreampDb: Float = -4.0f,
     val playbackSpeed: Float = 1.0f,
     val stereoBalance: Float = 0f,
-    val dynamicArtworkColors: Boolean = true
+    val dynamicArtworkColors: Boolean = true,
+    val fadeOnPauseEnabled: Boolean = false
+)
+
+@Immutable
+data class ReplayGainScanUiState(
+    val isVisible: Boolean = false,
+    val isRunning: Boolean = false,
+    val completed: Boolean = false,
+    val onlyMissing: Boolean = true,
+    val totalCount: Int = 0,
+    val processedCount: Int = 0,
+    val analyzedCount: Int = 0,
+    val skippedCount: Int = 0,
+    val failedCount: Int = 0,
+    val cachedTracksCount: Int = 0,
+    val currentTrackLabel: String = ""
 )
 
 @Immutable

@@ -7,9 +7,11 @@ import com.example.model.EqBandInfo
 import com.example.model.EqPreset
 import com.example.model.TEN_BAND_CENTERS_HZ
 
+import kotlin.math.roundToInt
+
 /**
  * Manages OS Android audio DSP effects (BassBoost, Virtualizer, and LoudnessEnhancer for
- * automatic volume normalization on untagged tracks) bound to ExoPlayer's audioSessionId,
+ * ReplayGain positive preamp headroom & volume normalization) bound to ExoPlayer's audioSessionId,
  * while providing unified 10-band EQ metadata aligned with [TenBandEqualizerAudioProcessor].
  */
 class AudioEffectsController {
@@ -21,10 +23,12 @@ class AudioEffectsController {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var latestSettings: AudioSettings = AudioSettings()
     private var currentTrackHasReplayGainTag: Boolean = false
+    private var replayGainBoostDb: Float = 0f
 
     private var lastAppliedBass: Int? = null
     private var lastAppliedVirt: Int? = null
     private var lastAppliedLoudnessActive: Boolean? = null
+    private var lastAppliedLoudnessGainMb: Int? = null
 
     @Synchronized
     fun attachToSession(audioSessionId: Int, settings: AudioSettings = latestSettings) {
@@ -51,8 +55,28 @@ class AudioEffectsController {
     }
 
     @Synchronized
+    fun setReplayGainBoostDb(boostDb: Float) {
+        val safeBoost = if (boostDb.isFinite()) boostDb.coerceIn(0f, 12f) else 0f
+        if (kotlin.math.abs(replayGainBoostDb - safeBoost) < 0.01f) return
+        replayGainBoostDb = safeBoost
+        if (currentSessionId > 0) {
+            applyLoudnessNormalizationInternal(latestSettings, force = false)
+        }
+    }
+
+    @Synchronized
+    fun currentReplayGainBoostMb(): Int {
+        return if (latestSettings.replayGainEnabled && replayGainBoostDb > 0.05f) {
+            (replayGainBoostDb * 100f).roundToInt().coerceIn(0, 1200)
+        } else {
+            0
+        }
+    }
+
+    @Synchronized
     fun isLoudnessNormalizationRequested(): Boolean {
-        return latestSettings.replayGainEnabled && !currentTrackHasReplayGainTag
+        return latestSettings.replayGainEnabled &&
+            (replayGainBoostDb > 0.05f || !currentTrackHasReplayGainTag)
     }
 
     @Suppress("DEPRECATION")
@@ -120,22 +144,26 @@ class AudioEffectsController {
         val sessionId = currentSessionId
         if (sessionId <= 0) return
 
-        // Use LoudnessEnhancer as gentle automatic leveler when Volume Normalization is ON
-        // and the current track does not provide an explicit REPLAYGAIN_TRACK_GAIN tag.
-        val shouldEnableEnhancer = settings.replayGainEnabled && !currentTrackHasReplayGainTag
+        val explicitBoostMb = if (settings.replayGainEnabled && replayGainBoostDb > 0.05f) {
+            (replayGainBoostDb * 100f).roundToInt().coerceIn(0, 1200)
+        } else {
+            0
+        }
+        val shouldEnableEnhancer = explicitBoostMb > 0
         if (shouldEnableEnhancer) {
             if (loudnessEnhancer == null) {
                 runCatching { loudnessEnhancer = LoudnessEnhancer(sessionId) }
                     .onFailure { releaseLoudnessEnhancer() }
             }
             val enhancer = loudnessEnhancer
-            if (enhancer != null && (force || lastAppliedLoudnessActive != true)) {
+            if (enhancer != null && (force || lastAppliedLoudnessActive != true || lastAppliedLoudnessGainMb != explicitBoostMb)) {
                 val ok = runCatching {
-                    enhancer.setTargetGain(NORMALIZATION_TARGET_GAIN_MB)
+                    enhancer.setTargetGain(explicitBoostMb)
                     if (!enhancer.enabled) enhancer.enabled = true
                 }.isSuccess
                 if (ok) {
                     lastAppliedLoudnessActive = true
+                    lastAppliedLoudnessGainMb = explicitBoostMb
                 } else {
                     releaseLoudnessEnhancer()
                 }
@@ -143,6 +171,7 @@ class AudioEffectsController {
         } else if (loudnessEnhancer != null || force || lastAppliedLoudnessActive == true) {
             releaseLoudnessEnhancer()
             lastAppliedLoudnessActive = false
+            lastAppliedLoudnessGainMb = 0
         }
     }
 
@@ -174,6 +203,7 @@ class AudioEffectsController {
         lastAppliedBass = null
         lastAppliedVirt = null
         lastAppliedLoudnessActive = null
+        lastAppliedLoudnessGainMb = null
     }
 
     private fun releaseBassBoost() {
@@ -193,9 +223,5 @@ class AudioEffectsController {
         runCatching { loudnessEnhancer?.enabled = false }
         runCatching { loudnessEnhancer?.release() }
         loudnessEnhancer = null
-    }
-
-    companion object {
-        private const val NORMALIZATION_TARGET_GAIN_MB = 350
     }
 }

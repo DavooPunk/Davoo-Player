@@ -60,6 +60,7 @@ class MusicRepository(
     private val sdTracksFlow = MutableStateFlow<List<AudioTrack>>(emptyList())
     private val _sdCardFolders = MutableStateFlow(prefsStore.loadSdCardFolders())
     val sdCardFoldersFlow: StateFlow<List<SdCardFolder>> = _sdCardFolders.asStateFlow()
+    private val computedReplayGainFlow = MutableStateFlow(prefsStore.loadComputedReplayGainMap())
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -90,8 +91,9 @@ class MusicRepository(
     private val combinedRawTracksFlow: Flow<List<AudioTrack>> = combine(
         rawSourcesFlow,
         trackStatsDao.observeAllStats(),
-        trackTagOverrideDao.observeAllOverrides()
-    ) { merged, statsList, overridesList ->
+        trackTagOverrideDao.observeAllOverrides(),
+        computedReplayGainFlow
+    ) { merged, statsList, overridesList, computedGains ->
         val statsMap = statsList.associateBy { it.trackId }
         val overrideMap = overridesList.associateBy { it.trackId }
 
@@ -109,9 +111,23 @@ class MusicRepository(
                 albumArtUri = ov?.customArtworkUri ?: track.albumArtUri,
                 isFavorite = stats?.isFavorite ?: false,
                 playCount = stats?.playCount ?: 0,
-                lastPlayedAt = stats?.lastPlayedAt ?: 0L
+                lastPlayedAt = stats?.lastPlayedAt ?: 0L,
+                replayGainDb = track.replayGainDb ?: computedGains[track.id]
             )
         }
+    }
+
+    fun getComputedReplayGainCount(): Int = computedReplayGainFlow.value.size
+
+    suspend fun saveComputedReplayGainBatch(entries: Map<String, Float>) = withContext(Dispatchers.IO) {
+        if (entries.isEmpty()) return@withContext
+        val merged = prefsStore.mergeComputedReplayGains(entries)
+        computedReplayGainFlow.value = merged
+    }
+
+    suspend fun clearComputedReplayGains() = withContext(Dispatchers.IO) {
+        prefsStore.clearComputedReplayGains()
+        computedReplayGainFlow.value = emptyMap()
     }
 
     /** Full track list including tracks in excluded folders (for Folder manager UI). */
@@ -541,6 +557,16 @@ class MusicRepository(
         )
     }
 
+    suspend fun getAllSavedLyricsOnce(): Map<String, TrackLyricsEntity> = withContext(Dispatchers.IO) {
+        runCatching {
+            trackLyricsDao.getAllLyricsOnce().associateBy { it.trackId }
+        }.getOrDefault(emptyMap())
+    }
+
+    suspend fun hasEmbeddedSyncedLyrics(track: AudioTrack): Boolean = withContext(Dispatchers.IO) {
+        AudioTagParsers.extractLyricsForTrack(context, track)?.isSynced == true
+    }
+
     suspend fun saveDownloadedLyrics(
         trackId: String,
         candidate: OnlineLyricsCandidate
@@ -562,6 +588,11 @@ class MusicRepository(
         }
         parsed
     }
+
+    suspend fun saveBatchDownloadedLyrics(
+        trackId: String,
+        candidate: OnlineLyricsCandidate
+    ): Boolean = saveDownloadedLyrics(trackId, candidate) != null
 
     data class SavedOfflineTranslation(
         val language: LyricsTranslationLanguage,

@@ -359,7 +359,8 @@ fun LocalAudioScannerList(
                 ) {
                     itemsIndexed(
                         items = filteredTracks,
-                        key = { _, track -> track.id }
+                        key = { _, track -> track.id },
+                        contentType = { _, _ -> "local_track" }
                     ) { index, track ->
                         val isCurrent = currentTrackId == track.id
                         TrackRow(
